@@ -1,0 +1,16 @@
+{
+  "task_id": "easy",
+  "display_name": "First-Touch Outreach",
+  "difficulty": "easy",
+  "description": "A new lead has come in. Read their profile, understand the product, and send the best possible first outreach via the correct channel.",
+  "lead_id": "L-001",
+  "max_steps": 3,
+  "success_criteria": {
+    "lead_must_reach_stage": "contacted",
+    "required_actions": ["send_email"],
+    "must_update_crm": false,
+    "documents_must_be_requested": false,
+    "compliance_required": true
+  },
+  "hint": "L-001 prefers email. They have documents pending. Introduce yourself, mention a relevant product feature, and keep the body personalised."
+}

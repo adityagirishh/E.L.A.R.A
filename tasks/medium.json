@@ -1,0 +1,17 @@
+{
+  "task_id": "medium",
+  "display_name": "Follow-Up Handling",
+  "difficulty": "medium",
+  "description": "A lead replied to your intro email with pricing objections. Interpret the context, handle the objection, request missing documents, and update the CRM.",
+  "lead_id": "L-004",
+  "max_steps": 4,
+  "success_criteria": {
+    "lead_must_reach_stage": "awaiting_docs",
+    "required_actions": ["request_documents", "update_crm"],
+    "must_update_crm": true,
+    "documents_must_be_requested": true,
+    "objection_must_be_addressed": true,
+    "compliance_required": true
+  },
+  "hint": "L-004 has a pricing objection and docs pending. Address the pricing concern in your follow-up, request documents, then update the CRM with the interaction note."
+}

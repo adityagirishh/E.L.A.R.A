@@ -1,0 +1,18 @@
+{
+  "task_id": "hard",
+  "display_name": "Multi-Channel Orchestration",
+  "difficulty": "hard",
+  "description": "A hot lead has had a proposal sitting for 7 days. They prefer calls. Documents are still pending. Orchestrate the right sequence of actions across channels to push them to closed_won.",
+  "lead_id": "L-007",
+  "max_steps": 6,
+  "success_criteria": {
+    "lead_must_reach_stage": "closed_won",
+    "required_actions": ["make_call", "request_documents", "update_crm"],
+    "must_update_crm": true,
+    "documents_must_be_requested": true,
+    "must_respect_channel_preference": true,
+    "compliance_required": true,
+    "must_not_duplicate_channel": true
+  },
+  "hint": "L-007 prefers calls. Proposal is 7 days old (follow-up due). Start with a call, then request docs via email, update CRM, and close the deal."
+}

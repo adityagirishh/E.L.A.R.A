@@ -1,0 +1,11 @@
+name: elara
+version: "0.1.0"
+display_name: E.L.A.R.A.
+description: Sandboxed multi-channel sales operations environment for OpenEnv.
+tags:
+  - openenv
+  - sales
+  - crm
+  - multi-channel
+  - hackathon
+entrypoint: app:app
