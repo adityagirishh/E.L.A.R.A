@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 #!/usr/bin/env python3
 """
 run.py — E.L.A.R.A. Easy Task: End-to-End Smoke Test
@@ -150,3 +151,23 @@ print(f"  Bad agent score:  {R}{bad_result['score']:.4f}{RST}  {'✓' if bad_res
 diff = good_result['score'] - bad_result['score']
 print(f"  Δ difference:     {BOLD}{diff:+.4f}{RST}")
 print(f"\n  {DIM}Reward engine is working — good agent scores {diff:.0%} higher.{RST}\n")
+=======
+from environment import ElaraEnv
+from models import Action
+
+env = ElaraEnv()
+obs = env.reset()
+print(obs.model_dump())
+
+obs, reward, done, info = env.step(
+    Action(
+        action_type="email",
+        target_lead_id="L-001",
+        subject="Requesting your documents",
+        content="Hi Arun, sharing the documents request as discussed.",
+    )
+)
+
+print(obs.model_dump())
+print(reward, done, info)
+>>>>>>> 8cffedc4c8dc68dd752a6a32295fc5d3f86bccf5
