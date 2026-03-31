@@ -10,6 +10,7 @@
     "required_actions": ["send_email"],
     "must_update_crm": false,
     "documents_must_be_requested": false,
+    "must_respect_channel_preference": true,
     "compliance_required": true
   },
   "hint": "L-001 prefers email. They have documents pending. Introduce yourself, mention a relevant product feature, and keep the body personalised."
