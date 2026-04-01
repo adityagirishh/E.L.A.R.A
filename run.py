@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 run.py — E.L.A.R.A. Full Smoke Test
-Runs all 3 tasks (easy / medium / hard) with good + bad agents.
+Runs all 5 tasks (easy / medium / hard / escalation / consent) with good + bad agents.
 Usage:  python run.py
 """
 
@@ -33,6 +33,8 @@ def print_obs(obs):
     print(f"  {BOLD}Channel:{RST} last={d['last_contact_channel']}  preferred={C}{d['preferred_channel']}{RST}  days_since={d['days_since_last_contact']}  followup_due={d['next_followup_due']}d")
     print(f"  {BOLD}Docs:{RST}   {''+R+'PENDING'+RST if d['documents_pending'] else G+'ok'+RST}  ·  objections: {d['objections'] or 'none'}")
     print(f"  {BOLD}Budget:{RST} {d['policy_constraints']['max_steps_remaining']} steps left")
+    if d.get('active_leads') and len(d['active_leads']) > 1:
+        print(f"  {BOLD}Active leads:{RST} {', '.join(l['lead_id']+' ('+l['lead_stage']+')' for l in d['active_leads'])}")
     if d['task_hint']:
         print(f"  {DIM}Hint: {d['task_hint']}{RST}")
     sep()
@@ -52,6 +54,9 @@ def print_step(n, action, reward, info_d):
         for k,v in bd.items():
             c2 = G if v["reward"]>0 else R
             print(f"    {c2}{v['reward']:+.2f}{RST}  {k:<20} {DIM}{v['reason']}{RST}")
+    if info_d.get("lead_response"):
+        resp = info_d["lead_response"]
+        print(f"    {B}💬 Lead says:{RST} \"{resp.get('text', '')[:80]}\"")
 
 def print_grade(result):
     sc   = result["score"]
@@ -66,14 +71,14 @@ def print_grade(result):
     for dim, data in result["dimensions"].items():
         s=data["score"]; w=data["weight"]
         c2=col_score(s)
-        print(f"  {dim:<24} {c2}{s:>6.2f}{RST}  {w:>4.0%}  {s*w:>12.4f}  {DIM}{data['reason'][:48]}{RST}")
+        print(f"  {dim:<24} {c2}{s:>6.2f}{RST}  {w:>4.0%}  {s*w:>12.4f}  {DIM}{data['reason'][:60]}{RST}")
     sep()
     print(f"  {'TOTAL':<24} {col}{sc:>6.4f}{RST}  100%  {sc:>12.4f}")
 
-def run(label, task_id, actions):
+def run(label, task_id, actions, seed=0):
     hdr(label)
     env = ElaraEnv()
-    obs = env.reset(task_id=task_id)
+    obs = env.reset(task_id=task_id, seed=seed)
     sub("Initial observation")
     print_obs(obs)
     sub("Executing actions")
@@ -112,19 +117,19 @@ easy_good = run("EASY · Good Agent — First-Touch Outreach", "easy", [
 
 easy_bad = run("EASY · Bad Agent — Wrong channel, no personalisation", "easy", [
     Action(
-        action_type="make_call",          # wrong: Arun prefers email
+        action_type="make_call",
         target_lead_id="L-001",
-        body="",                          # empty — no personalisation
+        body="",
         goal="",
     ),
     Action(
-        action_type="make_call",          # duplicate channel
+        action_type="make_call",
         target_lead_id="L-001",
         body="just following up",
         goal="",
     ),
     Action(
-        action_type="wait",               # useless final action
+        action_type="wait",
         target_lead_id="L-001",
     ),
 ])
@@ -143,11 +148,9 @@ medium_good = run("MEDIUM · Good Agent — Follow-Up & Doc Request", "medium", 
             "Hi Priya, thanks for your reply about pricing. "
             "Our ROI calculator shows teams like SwiftOps typically save 8h/week per rep — "
             "at our ₹2,999/seat plan that's a 10x return in 3 months. "
-            "Happy to walk through the numbers on a call. "
-            "In the meantime, could you share the signed NDA and your current tooling overview? "
-            "That'll help me tailor the proposal specifically for your team."
+            "Happy to walk through the numbers on a call."
         ),
-        goal="handle_objection_and_request_docs",
+        goal="handle_objection",
         priority="high",
     ),
     Action(
@@ -155,7 +158,7 @@ medium_good = run("MEDIUM · Good Agent — Follow-Up & Doc Request", "medium", 
         target_lead_id="L-004",
         subject="Documents for SwiftOps proposal",
         body=(
-            "Hi Priya, just circling back on the documents — "
+            "Hi Priya, circling back on documents — "
             "NDA and tooling overview when you get a chance. "
             "Once I have those I can get the proposal to you within 24 hours."
         ),
@@ -165,96 +168,207 @@ medium_good = run("MEDIUM · Good Agent — Follow-Up & Doc Request", "medium", 
         action_type="update_crm",
         target_lead_id="L-004",
         goal="log_interaction",
-        metadata={"note": "Handled pricing objection with ROI data. Doc request sent x2. Lead in awaiting_docs stage."},
+        metadata={"note": "Handled pricing objection with ROI data. Doc request sent. Lead in awaiting_docs."},
     ),
 ])
 
 medium_bad = run("MEDIUM · Bad Agent — Ignores objection, wrong channel, no CRM", "medium", [
-    Action(
-        action_type="make_call",          # L-004 prefers email
-        target_lead_id="L-004",
-        body="Hi, just wanted to check in.",
-        goal="",
-    ),
-    Action(
-        action_type="wait",
-        target_lead_id="L-004",
-    ),
-    Action(
-        action_type="wait",
-        target_lead_id="L-004",
-    ),
-    Action(
-        action_type="wait",
-        target_lead_id="L-004",
-    ),
+    Action(action_type="make_call", target_lead_id="L-004", body="Hi, just wanted to check in.", goal=""),
+    Action(action_type="wait", target_lead_id="L-004"),
+    Action(action_type="wait", target_lead_id="L-004"),
+    Action(action_type="wait", target_lead_id="L-004"),
 ])
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# HARD TASK
+# HARD TASK (multi-lead: L-007 + L-008)
 # ═════════════════════════════════════════════════════════════════════════════
 
-hard_good = run("HARD · Good Agent — Multi-Channel Orchestration to Close", "hard", [
-    # Proposal is 7d old, L-007 prefers calls — start with a call nudge
+hard_good = run("HARD · Good Agent — Multi-Lead Orchestration", "hard", [
+    # L-007: proposal 7d old, prefers calls — start with a call
     Action(
         action_type="make_call",
         target_lead_id="L-007",
         body=(
-            "Hi Rajan, just following up on the proposal I sent over last week. "
-            "Wanted to check if you had any questions and whether the team had a chance to review it. "
-            "We're excited about the potential fit with Apex Ventures."
+            "Hi Rajan, following up on the proposal I sent last week for Apex Ventures. "
+            "Wanted to check if your team had a chance to review it. "
+            "We're excited about the potential fit — E.L.A.R.A. cuts lead response time by 60%."
         ),
         goal="proposal_followup",
         priority="high",
     ),
-    # Docs still pending — request via email
+    # L-008: negotiating, prefers messages, contract term objections
+    Action(
+        action_type="send_message",
+        target_lead_id="L-008",
+        body=(
+            "Hi Sunita, following up on our negotiation for BlueSky Tech. "
+            "Regarding the contract terms concern — we can offer flexible payment terms "
+            "and adjust the clause structure to fit your procurement process. "
+            "Happy to discuss specifics."
+        ),
+        goal="handle_objection",
+    ),
+    # L-007: request docs via email
     Action(
         action_type="request_documents",
         target_lead_id="L-007",
         subject="Documents needed — Apex Ventures",
         body=(
             "Hi Rajan, great speaking just now. "
-            "To finalise the agreement I'll need the signed NDA and your procurement form. "
-            "Could you share those at your earliest convenience? "
-            "I can have the final contract ready within 24 hours of receiving them."
+            "To finalise the agreement I'll need the signed NDA and procurement form."
         ),
         goal="get_documents",
     ),
-    # Send a message for quick back-and-forth
+    # L-008: follow up via email (different channel from previous message)
     Action(
-        action_type="send_message",
-        target_lead_id="L-007",
-        body="Hi Rajan — just sent the docs request via email. Let me know if you need any changes to the proposal terms. Happy to hop on another call if helpful.",
-        goal="keep_warm",
+        action_type="send_email",
+        target_lead_id="L-008",
+        subject="Updated terms for BlueSky Tech",
+        body=(
+            "Hi Sunita, as discussed, I've revised the contract terms for BlueSky Tech. "
+            "Attached are the updated payment schedule and adjusted clause. "
+            "Let me know if this works for your procurement team."
+        ),
+        goal="send_revised_terms",
     ),
-    # Update CRM
+    # CRM update for both
     Action(
         action_type="update_crm",
         target_lead_id="L-007",
         goal="log_interaction",
-        metadata={"note": "Follow-up call done. Doc request emailed. Message sent. Lead is hot — docs pending. Target close this week."},
-    ),
-    # Close
-    Action(
-        action_type="make_call",
-        target_lead_id="L-007",
-        body="Hi Rajan, received your documents — everything looks good. Ready to move forward?",
-        goal="close_deal",
-        metadata={"docs_received": True},
+        metadata={"note": "L-007: Follow-up call done, docs requested. L-008: Handled contract terms objection via message + email."},
     ),
 ])
 
-hard_bad = run("HARD · Bad Agent — Spams same channel, ignores docs, no close", "hard", [
-    Action(action_type="send_email", target_lead_id="L-007",
-           body="Hi following up.", goal=""),
-    Action(action_type="send_email", target_lead_id="L-007",  # duplicate channel
-           body="Hi again.", goal=""),
-    Action(action_type="send_email", target_lead_id="L-007",  # triple duplicate
-           body="Just checking in.", goal=""),
+hard_bad = run("HARD · Bad Agent — Ignores L-008, spams same channel", "hard", [
+    Action(action_type="send_email", target_lead_id="L-007", body="Hi following up.", goal=""),
+    Action(action_type="send_email", target_lead_id="L-007", body="Hi again.", goal=""),
+    Action(action_type="send_email", target_lead_id="L-007", body="Just checking in.", goal=""),
     Action(action_type="wait", target_lead_id="L-007"),
     Action(action_type="wait", target_lead_id="L-007"),
     Action(action_type="wait", target_lead_id="L-007"),
+    Action(action_type="wait", target_lead_id="L-007"),
+])
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# ESCALATION TASK
+# ═════════════════════════════════════════════════════════════════════════════
+
+escalation_good = run("ESCALATION · Good Agent — Recognize & Escalate", "escalation", [
+    # Recognise docs have been requested twice — escalate instead of requesting again
+    Action(
+        action_type="send_email",
+        target_lead_id="L-014",
+        body=(
+            "Hi Lavanya, I noticed the documents for ClearPath Solutions have been pending "
+            "for over a week. I understand these things can get stuck in legal. "
+            "I'm going to loop in our senior rep to help move things along."
+        ),
+        goal="context_before_escalation",
+    ),
+    Action(
+        action_type="escalate",
+        target_lead_id="L-014",
+        body="Escalating L-014 — docs requested twice with no response, 8 days elapsed.",
+        goal="escalate_stuck_deal",
+        metadata={"reason": "docs_stuck_in_legal", "prior_requests": 2},
+    ),
+    Action(
+        action_type="update_crm",
+        target_lead_id="L-014",
+        goal="log_interaction",
+        metadata={"note": "Escalated to senior rep. Docs requested 2x, no response after 8 days. Legal blockers suspected."},
+    ),
+])
+
+escalation_bad = run("ESCALATION · Bad Agent — Keeps requesting docs", "escalation", [
+    Action(
+        action_type="request_documents",
+        target_lead_id="L-014",
+        body="Please send the documents.",
+        goal="get_documents",
+    ),
+    Action(
+        action_type="request_documents",
+        target_lead_id="L-014",
+        body="Reminder: still need those docs.",
+        goal="get_documents",
+    ),
+    Action(action_type="wait", target_lead_id="L-014"),
+    Action(action_type="wait", target_lead_id="L-014"),
+])
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# CONSENT TASK (multi-lead: L-016, L-012, L-019 with consent trap)
+# ═════════════════════════════════════════════════════════════════════════════
+
+consent_good = run("CONSENT · Good Agent — Compliance Navigation", "consent", [
+    # Contact L-016 via email (preferred)
+    Action(
+        action_type="send_email",
+        target_lead_id="L-016",
+        body=(
+            "Hi Ria, thanks for attending our webinar! "
+            "I wanted to reach out about E.L.A.R.A. for BrightWave — "
+            "our platform cuts lead response time by 60%. "
+            "Would love to set up a quick demo."
+        ),
+        goal="intro",
+        priority="high",
+    ),
+    # Contact L-012 via message (preferred)
+    Action(
+        action_type="send_message",
+        target_lead_id="L-012",
+        body=(
+            "Hi Nisha, saw your LinkedIn interest in Quantify AI's sales ops. "
+            "E.L.A.R.A. unifies email, calls and messages in one inbox. "
+            "Happy to share a quick overview — async works great."
+        ),
+        goal="intro",
+    ),
+    # Contact L-019 via email (preferred) — they WILL revoke consent after this
+    Action(
+        action_type="send_email",
+        target_lead_id="L-019",
+        body=(
+            "Hi Harish, we met at the trade show — wanted to follow up about "
+            "E.L.A.R.A. for BlueNorth. Our compliance-safe outreach templates "
+            "might be relevant to your engineering team."
+        ),
+        goal="intro",
+    ),
+    # After step 3, L-019 revokes consent. Good agent reads the response and STOPS.
+    # Instead, follow up with L-016 via call (different channel)
+    Action(
+        action_type="make_call",
+        target_lead_id="L-016",
+        body=(
+            "Hi Ria, just following up on the email I sent about E.L.A.R.A. for BrightWave. "
+            "Quick question — what's your current sales outreach workflow like?"
+        ),
+        goal="discovery",
+    ),
+    # CRM update
+    Action(
+        action_type="update_crm",
+        target_lead_id="L-016",
+        goal="log_interaction",
+        metadata={"note": "L-016: Intro email + discovery call. L-012: Intro message sent. L-019: Opted out after initial contact — do not follow up."},
+    ),
+])
+
+consent_bad = run("CONSENT · Bad Agent — Ignores consent revocation", "consent", [
+    Action(action_type="send_email", target_lead_id="L-019", body="Hi there.", goal="intro"),
+    # L-019 revokes consent after this step — bad agent ignores it
+    Action(action_type="send_email", target_lead_id="L-019", body="Following up.", goal="followup"),
+    Action(action_type="send_email", target_lead_id="L-019", body="Any update?", goal="followup"),
+    Action(action_type="wait", target_lead_id="L-019"),
+    Action(action_type="wait", target_lead_id="L-019"),
+    Action(action_type="wait", target_lead_id="L-019"),
 ])
 
 
@@ -270,6 +384,10 @@ results = [
     ("Medium · Bad ", medium_bad),
     ("Hard   · Good", hard_good),
     ("Hard   · Bad ", hard_bad),
+    ("Escal  · Good", escalation_good),
+    ("Escal  · Bad ", escalation_bad),
+    ("Consent· Good", consent_good),
+    ("Consent· Bad ", consent_bad),
 ]
 sep()
 print(f"  {'Agent':<20} {'Score':>7}  {'Pass':>5}  {'Stage':<16}  {'Steps':>6}  {'Completed'}")
@@ -281,14 +399,17 @@ for label, r in results:
     print(f"  {label:<20} {col}{r['score']:>7.4f}{RST}  {pf}       {Y}{r['final_stage']:<16}{RST}  {r['steps_used']:>2}/{r['max_steps']:<3}  {tc}")
 sep()
 
-# Δ gaps
-gaps = [
-    ("Easy",   easy_good['score']  - easy_bad['score']),
-    ("Medium", medium_good['score']- medium_bad['score']),
-    ("Hard",   hard_good['score']  - hard_bad['score']),
+# Gaps
+pairs = [
+    ("Easy",      easy_good,       easy_bad),
+    ("Medium",    medium_good,     medium_bad),
+    ("Hard",      hard_good,       hard_bad),
+    ("Escalation",escalation_good, escalation_bad),
+    ("Consent",   consent_good,    consent_bad),
 ]
 print(f"\n  Good vs Bad gaps:")
-for name, delta in gaps:
+for name, good, bad in pairs:
+    delta = good['score'] - bad['score']
     col = G if delta >= 0.20 else Y if delta >= 0.10 else R
-    print(f"  {name:<8}  {col}{delta:+.4f}{RST}  {'✓ signal strong' if delta>=0.20 else '⚠ signal weak — needs tuning'}")
+    print(f"  {name:<12}  {col}{delta:+.4f}{RST}  {'✓ signal strong' if delta>=0.20 else '⚠ signal weak'}")
 print()

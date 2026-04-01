@@ -1,0 +1,39 @@
+# Virtual environments
+elara/
+venv/
+.venv/
+env/
+.env/
+
+# Git
+.git/
+.gitignore
+
+# Python cache
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+
+# Tests (not needed in production image)
+tests/
+
+# Docs
+Rules&Regulations.md
+*.md
+!README.md
+
+# Misc
+*.log
+*.tar
+tmp/
+temp/

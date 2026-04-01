@@ -1,3 +1,14 @@
+---
+title: E.L.A.R.A.
+emoji: 📞
+colorFrom: blue
+colorTo: indigo
+sdk: docker
+app_port: 7860
+tags:
+  - openenv
+---
+
 # E.L.A.R.A.
 ## Extensive LLM Applied Reasoning Agent
 
@@ -127,6 +138,7 @@ docker run -p 7860:7860 elara
 ```
 elara/
 ├── server.py          ← FastAPI app (all endpoints)
+├── inference.py       ← LLM inference script (mandatory for submission)
 ├── run.py             ← Smoke test — runs all tasks, no server needed
 ├── requirements.txt
 ├── Dockerfile
@@ -135,14 +147,16 @@ elara/
 ├── app/
 │   ├── environment.py   ← ElaraEnv: reset() / step() / state()
 │   ├── models.py        ← Pydantic models: Action, Observation, LeadProfile...
-│   ├── reward_engine.py ← 8 reward components, exact values from spec
-│   ├── crm_simulator.py ← 20 leads + stage transition logic
-│   └── grader.py        ← 5-dimension deterministic scorer (0.0–1.0)
+│   ├── reward_engine.py ← 8 reward components + objection addressing
+│   ├── crm_simulator.py ← 20 leads + stage transitions + dynamic responses
+│   └── grader.py        ← 5-dimension scorer with multi-lead support
 │
 └── tasks/
     ├── easy.json        ← First-Touch Outreach (L-001, 3 steps)
     ├── medium.json      ← Follow-Up Handling (L-004, 4 steps)
-    └── hard.json        ← Multi-Channel Orchestration (L-007, 6 steps)
+    ├── hard.json        ← Multi-Lead Orchestration (L-007 + L-008, 7 steps)
+    ├── escalation.json  ← Escalation Decision (L-014, 4 steps)
+    └── consent.json     ← Compliance Navigation (L-016 + L-012 + L-019, 6 steps)
 ```
 
 ---
@@ -220,7 +234,9 @@ obs.days_since_last_contact
 obs.next_followup_due      # days until follow-up is due
 obs.documents_pending      # bool
 obs.objections             # ["pricing", "not the right time", ...]
-obs.consent                # bool — False = do not contact
+obs.consent                # bool — False = do not contact (can change mid-episode!)
+obs.active_leads           # summaries of ALL active leads in multi-lead tasks
+obs.lead_responses         # recent replies FROM leads — critical for decision-making
 obs.product_context        # features, value props, pricing, FAQs
 obs.recent_history         # last 5 interactions
 obs.policy_constraints     # consent_required, max_steps_remaining, ...
@@ -241,7 +257,7 @@ obs.available_actions      # all 9 action types
 | Lead progression | +0.30 | Stage advanced |
 | Policy compliance | +0.10 | No violations |
 | Wrong channel | −0.20 | Ignored lead preference |
-| Duplicate outreach | −0.20 | Same channel two steps in a row |
+| Duplicate outreach | −0.20 | Same channel + same goal back-to-back |
 | Consent violation | −0.50 | Contacted lead with consent=False |
 | Looping | −0.10 | >80% of step budget used, not done |
 
@@ -261,7 +277,7 @@ obs.available_actions      # all 9 action types
 
 ---
 
-## Tasks
+## Tasks (5 total, easy → hard)
 
 ### Easy — First-Touch Outreach
 - Lead: Arun Sharma (L-001) — new, prefers email, docs pending
@@ -275,21 +291,45 @@ obs.available_actions      # all 9 action types
 - Goal: handle objection, request documents, update CRM
 - Required actions: `request_documents`, `update_crm`
 
-### Hard — Multi-Channel Orchestration
-- Lead: Rajan Mehta (L-007) — proposal sent 7 days ago, prefers calls, docs pending, hot
+### Hard — Multi-Lead Orchestration
+- **Two leads**: Rajan Mehta (L-007, proposal_sent, call preferred) + Sunita Kapoor (L-008, negotiating, message preferred, contract objections)
+- Budget: 7 steps
+- Goal: advance both leads across channels, update CRM
+- Required: `make_call` + `request_documents` (L-007), `send_message` (L-008), `update_crm`
+
+### Escalation — Escalation Decision
+- Lead: Lavanya Suresh (L-014) — stuck in awaiting_docs for 8 days, docs requested twice
+- Budget: 4 steps
+- Goal: recognize futility of more doc requests, escalate to senior rep
+- Required actions: `escalate`, `update_crm`
+
+### Consent — Compliance Navigation
+- **Three leads**: L-016 (warm, email), L-012 (neutral, message), L-019 (cold, email — **revokes consent after first contact**)
 - Budget: 6 steps
-- Goal: call to follow up, email for docs, close deal
-- Required actions: `make_call`, `request_documents`, `update_crm`
+- Goal: contact willing leads, STOP contacting L-019 after opt-out
+- Required: `send_email` (L-016), `send_message` (L-012), `update_crm`
 
 ---
 
-## Baseline Scores (good agent)
+## Key Features
+
+- **Dynamic lead responses**: leads reply after contact actions with template-based responses that vary by sentiment, message quality, and RNG seed
+- **State mutations**: sentiment shifts, consent revocation, and objection changes happen dynamically based on agent behaviour
+- **Multi-lead tasks**: hard and consent tasks require managing multiple leads simultaneously with a shared step budget
+- **Seeded stochastic variation**: `seed` parameter randomizes objections, sentiment, and timing — same seed = reproducible, different seed = variety
+- **Compliance traps**: leads can revoke consent mid-episode — agents must read responses and adapt
+
+---
+
+## Baseline Scores (good agent, seed=0)
 
 | Task | Score | Pass |
 |---|---|---|
-| Easy   | 0.955 | ✓ |
-| Medium | 0.930 | ✓ |
-| Hard   | 0.670 | ✓ |
+| Easy       | 0.955 | ✓ |
+| Medium     | 0.910 | ✓ |
+| Hard       | 0.860 | ✓ |
+| Escalation | 0.980 | ✓ |
+| Consent    | 0.910 | ✓ |
 
 ---
 
@@ -299,8 +339,11 @@ All 20 leads are in `app/crm_simulator.py`. Key scenarios covered:
 
 - `L-001` — New lead, email preferred, docs pending (Easy task)
 - `L-004` — Pricing objection, follow-up overdue (Medium task)
-- `L-007` — Hot lead, proposal 7d old, call preferred (Hard task)
+- `L-007` — Hot lead, proposal 7d old, call preferred (Hard task — multi-lead)
+- `L-008` — Negotiating, contract objections, message preferred (Hard task — multi-lead)
 - `L-009` — **consent=False** — contacting triggers −0.5 penalty
-- `L-010` — Contacted today — contacting again triggers timing penalty
-- `L-014` — Docs requested twice, needs escalation
+- `L-012` — Message preferred, part of consent task
+- `L-014` — Docs requested twice, needs escalation (Escalation task)
+- `L-016` — Warm webinar attendee, email preferred (Consent task)
+- `L-019` — Cold lead, **revokes consent mid-episode** (Consent task trap)
 - `L-020` — Closed won — upsell candidate

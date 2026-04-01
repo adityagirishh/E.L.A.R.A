@@ -2,17 +2,24 @@
   "task_id": "hard",
   "display_name": "Multi-Channel Orchestration",
   "difficulty": "hard",
-  "description": "A hot lead has had a proposal sitting for 7 days. They prefer calls. Documents are still pending. Orchestrate the right sequence of actions across channels to push them to closed_won.",
+  "description": "Two active deals need attention. L-007 (hot, proposal 7d old, prefers calls, docs pending) and L-008 (negotiating, contract term objections, prefers messages). Orchestrate the right sequence of actions across both leads and channels to advance them.",
   "lead_id": "L-007",
-  "max_steps": 6,
+  "lead_ids": ["L-007", "L-008"],
+  "max_steps": 7,
   "success_criteria": {
-    "lead_must_reach_stage": "closed_won",
-    "required_actions": ["make_call", "request_documents", "update_crm"],
+    "per_lead": {
+      "L-007": {
+        "lead_must_reach_stage": "negotiating",
+        "required_actions": ["make_call", "request_documents"]
+      },
+      "L-008": {
+        "lead_must_reach_stage": "negotiating",
+        "required_actions": ["send_message"]
+      }
+    },
     "must_update_crm": true,
-    "documents_must_be_requested": true,
     "must_respect_channel_preference": true,
-    "compliance_required": true,
-    "must_not_duplicate_channel": true
+    "compliance_required": true
   },
-  "hint": "L-007 prefers calls. Proposal is 7 days old (follow-up due). Start with a call, then request docs via email, update CRM, and close the deal."
+  "hint": "Two leads need attention. L-007 prefers calls — follow up on the 7-day-old proposal and request docs. L-008 prefers messages and has contract term objections — address the terms concern. Update CRM before finishing. Watch your step budget."
 }

@@ -5,18 +5,28 @@ API (OpenEnv-compatible):
     obs                     = env.reset(task_id="easy")
     obs, reward, done, info = env.step(action)
     state_dict              = env.state()
+
+v3 features:
+  - Seeded RNG for stochastic variation
+  - Dynamic lead responses after contact actions
+  - Multi-lead task support (active_leads in observation)
+  - Dynamic events: consent revocation, sentiment shifts
 """
 
 import json
+import random
 from copy import deepcopy
 from pathlib import Path
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from models import (
-    Action, EpisodeState, LeadProfile,
+    Action, EpisodeState, LeadProfile, LeadSummary,
     Observation, PolicyConstraints, ProductProfile,
 )
-from crm_simulator import SEED_LEADS, apply_action
+from crm_simulator import (
+    SEED_LEADS, apply_action, generate_lead_response,
+    apply_response_mutations, CONTACT_ACTIONS,
+)
 from reward_engine import calculate_reward
 
 TASKS_DIR = Path(__file__).parent.parent / "tasks"
@@ -48,9 +58,10 @@ SEED_PRODUCT = ProductProfile(
     compliance_notes=[
         "Never contact leads with consent=False.",
         "Respect preferred_channel when set.",
-        "request_documents always goes via email — this is exempt from channel preference.",
+        "request_documents always goes via email — exempt from channel preference.",
         "Do not contact same lead twice on same channel with the same goal.",
         "Escalate if documents not received after 2 requests.",
+        "If a lead revokes consent mid-conversation, STOP all contact immediately.",
     ],
     value_props=[
         "Cut lead response time by 60%.",
@@ -68,34 +79,55 @@ SEED_PRODUCT = ProductProfile(
 
 class ElaraEnv:
 
-    AVAILABLE_TASKS = ["easy", "medium", "hard"]
+    AVAILABLE_TASKS = ["easy", "medium", "hard", "escalation", "consent"]
 
     def __init__(self):
         self._state: Optional[EpisodeState] = None
+        self._rng: random.Random = random.Random()
+        self._task_cfg: Dict[str, Any] = {}
+        self._dynamic_events: Dict[str, Dict[str, Any]] = {}
 
     # ── reset ──────────────────────────────────────────────────────────────
 
     def reset(self, task_id: str = "easy", seed: Optional[int] = None) -> Observation:
         task_cfg  = self._load_task(task_id)
-        lead_id   = task_cfg["lead_id"]
+        self._task_cfg = task_cfg
+
+        # Seed the RNG
+        self._rng = random.Random(seed)
+
+        # Support single lead_id or multi lead_ids
+        lead_ids = task_cfg.get("lead_ids", [task_cfg["lead_id"]])
+        primary_lead_id = lead_ids[0]
         max_steps = task_cfg.get("max_steps", 5)
 
         leads = {k: deepcopy(v) for k, v in SEED_LEADS.items()}
-        if lead_id not in leads:
-            raise ValueError(f"Lead {lead_id} not found.")
+        for lid in lead_ids:
+            if lid not in leads:
+                raise ValueError(f"Lead {lid} not found.")
+
+        # Apply seed-based variations to active leads
+        if seed is not None:
+            self._apply_seed_variations(leads, lead_ids)
+
+        # Load dynamic events from task config
+        self._dynamic_events = task_cfg.get("dynamic_events", {})
 
         self._state = EpisodeState(
             product=deepcopy(SEED_PRODUCT),
             leads=leads,
-            current_lead_id=lead_id,
+            current_lead_id=primary_lead_id,
+            active_lead_ids=lead_ids,
             task_id=task_id,
             step_count=0,
             max_steps=max_steps,
             done=False,
             total_reward=0.0,
             episode_log=[],
+            lead_responses=[],
             seed=seed,
         )
+
         return self._build_observation(task_cfg.get("hint", ""))
 
     # ── step ───────────────────────────────────────────────────────────────
@@ -113,16 +145,18 @@ class ElaraEnv:
             s.done = True
             return self._build_observation(), -0.30, True, {"error": f"Unknown lead: {action.target_lead_id}"}
 
+        # Update current_lead_id to the targeted lead
+        s.current_lead_id = action.target_lead_id
         lead_before = deepcopy(s.leads[action.target_lead_id])
 
-        # Pull previous action context from log for smart duplicate/timing checks
+        # Previous action context
         prev_action_type, prev_goal = "", ""
         if s.episode_log:
             last = s.episode_log[-1]
             prev_action_type = last.get("action_type", "")
             prev_goal        = last.get("goal", "")
 
-        # Apply action
+        # Apply action → get updated lead + new stage
         updated_lead, new_stage = apply_action(s.leads[action.target_lead_id], action)
         s.leads[action.target_lead_id] = updated_lead
         s.step_count += 1
@@ -146,6 +180,49 @@ class ElaraEnv:
         if done_after:
             s.done = True
 
+        # Generate dynamic lead response
+        lead_response = None
+        if action.action_type in CONTACT_ACTIONS:
+            dynamic_events_for_lead = self._dynamic_events.get(action.target_lead_id, {})
+            # Check if this is a "trigger after first contact" event
+            contact_count = sum(
+                1 for e in s.episode_log
+                if e.get("target_lead") == action.target_lead_id
+                and e.get("action_type") in CONTACT_ACTIONS
+            )
+            # Only trigger consent revocation after the configured contact number
+            trigger_after = dynamic_events_for_lead.get("trigger_after_contact", 1)
+            if dynamic_events_for_lead.get("revoke_consent_after_contact") and contact_count + 1 >= trigger_after:
+                events_to_pass = dynamic_events_for_lead
+            else:
+                events_to_pass = {}
+
+            lead_response = generate_lead_response(
+                lead=s.leads[action.target_lead_id],
+                action=action,
+                product=s.product,
+                rng=self._rng,
+                dynamic_events=events_to_pass,
+            )
+
+        # Apply response mutations
+        if lead_response:
+            mutations = lead_response.get("mutations", {})
+            if mutations:
+                s.leads[action.target_lead_id] = apply_response_mutations(
+                    s.leads[action.target_lead_id], mutations
+                )
+            s.lead_responses.append(lead_response)
+
+            # Add response to lead's conversation history
+            s.leads[action.target_lead_id].conversation_history.append({
+                "from": "lead",
+                "channel": lead_response.get("channel", "reply"),
+                "text": lead_response.get("text", ""),
+                "response_type": lead_response.get("response_type", ""),
+            })
+
+        # Log
         log_entry = {
             "step":         s.step_count,
             "action_type":  action.action_type,
@@ -157,6 +234,8 @@ class ElaraEnv:
             "breakdown":    breakdown,
             "done":         s.done,
         }
+        if lead_response:
+            log_entry["lead_response"] = lead_response.get("text", "")
         s.episode_log.append(log_entry)
 
         info = {
@@ -167,6 +246,9 @@ class ElaraEnv:
             "total_reward":     s.total_reward,
             "done":             s.done,
         }
+        if lead_response:
+            info["lead_response"] = lead_response
+
         return self._build_observation(), reward, s.done, info
 
     # ── state ──────────────────────────────────────────────────────────────
@@ -190,6 +272,26 @@ class ElaraEnv:
             allow_campaign=(lead.lead_stage in {"contacted", "qualified"}),
         )
 
+        # Build active lead summaries for multi-lead tasks
+        active_leads = []
+        for lid in s.active_lead_ids:
+            al = s.leads[lid]
+            active_leads.append(LeadSummary(
+                lead_id=al.lead_id,
+                lead_name=al.lead_name,
+                company=al.company,
+                lead_stage=al.lead_stage,
+                sentiment=al.sentiment,
+                preferred_channel=al.preferred_channel,
+                documents_pending=al.documents_pending,
+                consent=al.consent,
+                days_since_last_contact=al.days_since_last_contact,
+                objections=al.objections,
+            ))
+
+        # Collect recent lead responses (last 5)
+        recent_responses = s.lead_responses[-5:]
+
         return Observation(
             task_id=s.task_id,
             step_count=s.step_count,
@@ -206,6 +308,11 @@ class ElaraEnv:
             documents_pending=lead.documents_pending,
             preferred_channel=lead.preferred_channel,
             objections=lead.objections,
+            active_leads=active_leads,
+            lead_responses=[
+                {"from": r.get("from", ""), "text": r.get("text", ""), "lead_id": r.get("lead_id", "")}
+                for r in recent_responses
+            ],
             product_context={
                 "name":              prod.product_name,
                 "description":       prod.description,
@@ -227,12 +334,44 @@ class ElaraEnv:
         )
 
     def _task_hint(self) -> str:
-        if not self._state:
+        if self._state is None:
             return ""
         try:
-            return self._load_task(self._state.task_id).get("hint", "")
+            cfg = self._load_task(self._state.task_id)
+            return cfg.get("hint", "")
         except Exception:
             return ""
+
+    def _apply_seed_variations(
+        self, leads: Dict[str, LeadProfile], active_ids: List[str]
+    ) -> None:
+        """Apply seeded random variations to active leads."""
+        rng = self._rng
+        sentiment_options = ["cold", "neutral", "warm", "hot"]
+        extra_objections = [
+            "pricing", "not the right time", "need to think about it",
+            "already using a competitor",
+        ]
+
+        for lid in active_ids:
+            lead = leads[lid]
+            # Small chance of sentiment shift
+            if rng.random() < 0.3:
+                idx = sentiment_options.index(lead.sentiment) if lead.sentiment in sentiment_options else 1
+                delta = rng.choice([-1, 1])
+                new_idx = max(0, min(len(sentiment_options) - 1, idx + delta))
+                lead.sentiment = sentiment_options[new_idx]
+
+            # Small chance of extra objection
+            if rng.random() < 0.2 and len(lead.objections) < 2:
+                candidates = [o for o in extra_objections if o not in lead.objections]
+                if candidates:
+                    lead.objections.append(rng.choice(candidates))
+
+            # Small chance of followup timing variation
+            if rng.random() < 0.25 and lead.next_followup_due > 0:
+                lead.next_followup_due += rng.choice([-1, 0, 1])
+                lead.next_followup_due = max(1, lead.next_followup_due)
 
     @staticmethod
     def _load_task(task_id: str) -> Dict[str, Any]:
