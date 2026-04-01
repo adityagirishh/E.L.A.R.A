@@ -1,5 +1,5 @@
 """
-app.py — E.L.A.R.A. FastAPI server
+server.py — E.L.A.R.A. FastAPI server
 Endpoints: /health /reset /step /state /tasks /grader
 """
 
@@ -10,9 +10,9 @@ sys.path.insert(0, str(Path(__file__).parent / "app"))
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
-from app.environment import ElaraEnv
-from app.models import Action, EpisodeState
-from app.grader import grade
+from environment import ElaraEnv
+from models import Action, EpisodeState
+from grader import grade
 
 app = FastAPI(
     title="E.L.A.R.A.",

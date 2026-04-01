@@ -8,4 +8,4 @@ tags:
   - crm
   - multi-channel
   - hackathon
-entrypoint: app:app
+entrypoint: server:app

@@ -1,25 +1,38 @@
 """
 crm_simulator.py
-20 seeded leads covering every scenario the tasks need to test.
-Also handles lead stage transitions based on action type.
+20 seeded leads + stage transition logic.
+
+Key rules:
+- request_documents NEVER regresses stage — it sets documents_pending=True
+  and moves to awaiting_docs only if stage is below awaiting_docs
+- close_deal (goal on make_call/send_message) on negotiating → closed_won
+- docs_received metadata on any action on awaiting_docs → back to negotiating
 """
 
 from copy import deepcopy
-from typing import Dict, Optional, Tuple
+from typing import Dict, Tuple
 from models import Action, LeadProfile
 
-# Import constant from reward_engine to avoid circular dep
 CONTACT_ACTIONS = {
     "send_email", "make_call", "send_message",
     "request_documents", "run_campaign",
 }
 
+# Actions that go via email regardless of lead preference
+# These are EXEMPT from channel preference penalty
+EMAIL_ONLY_ACTIONS = {"request_documents", "run_campaign"}
+
+STAGE_ORDER = [
+    "new", "contacted", "qualified", "awaiting_docs",
+    "proposal_sent", "negotiating", "closed_won", "closed_lost",
+]
+
 # ─────────────────────────────────────────────
-# The 20 seed leads
+# 20 seed leads
 # ─────────────────────────────────────────────
 
 SEED_LEADS: Dict[str, LeadProfile] = {
-    # ── EASY task leads ──────────────────────────────────────────────────
+    # EASY task
     "L-001": LeadProfile(
         lead_id="L-001", lead_name="Arun Sharma",
         company="NovaTech Solutions", role="Head of Sales",
@@ -47,8 +60,7 @@ SEED_LEADS: Dict[str, LeadProfile] = {
         documents_pending=False, preferred_channel="message",
         notes=["Cold inbound from website"],
     ),
-
-    # ── MEDIUM task leads (contacted, need follow-up) ─────────────────────
+    # MEDIUM task
     "L-004": LeadProfile(
         lead_id="L-004", lead_name="Priya Iyer",
         company="SwiftOps", role="CTO",
@@ -58,9 +70,7 @@ SEED_LEADS: Dict[str, LeadProfile] = {
         documents_pending=True, preferred_channel="email",
         objections=["pricing"],
         notes=["Replied asking for detailed pricing breakdown"],
-        conversation_history=[
-            {"step": 1, "channel": "email", "content": "Intro email sent"},
-        ],
+        conversation_history=[{"step":1,"channel":"email","content":"Intro email sent"}],
     ),
     "L-005": LeadProfile(
         lead_id="L-005", lead_name="Kiran Desai",
@@ -71,9 +81,7 @@ SEED_LEADS: Dict[str, LeadProfile] = {
         documents_pending=False, preferred_channel="any",
         objections=["need to think about it"],
         notes=["Positive call, asked for follow-up in a week"],
-        conversation_history=[
-            {"step": 1, "channel": "call", "content": "Discovery call completed"},
-        ],
+        conversation_history=[{"step":1,"channel":"call","content":"Discovery call completed"}],
     ),
     "L-006": LeadProfile(
         lead_id="L-006", lead_name="Ananya Reddy",
@@ -82,15 +90,13 @@ SEED_LEADS: Dict[str, LeadProfile] = {
         days_since_last_contact=2, next_followup_due=5,
         consent=True, sentiment="warm",
         documents_pending=True, preferred_channel="email",
-        objections=[],
         notes=["Qualified — needs contract and NDA before proceeding"],
         conversation_history=[
-            {"step": 1, "channel": "email", "content": "Intro email"},
-            {"step": 2, "channel": "call", "content": "Qualification call"},
+            {"step":1,"channel":"email","content":"Intro email"},
+            {"step":2,"channel":"call","content":"Qualification call"},
         ],
     ),
-
-    # ── HARD task leads (multi-channel orchestration) ─────────────────────
+    # HARD task
     "L-007": LeadProfile(
         lead_id="L-007", lead_name="Rajan Mehta",
         company="Apex Ventures", role="Founder & CEO",
@@ -98,12 +104,11 @@ SEED_LEADS: Dict[str, LeadProfile] = {
         days_since_last_contact=7, next_followup_due=5,
         consent=True, sentiment="hot",
         documents_pending=True, preferred_channel="call",
-        objections=[],
         notes=["Proposal sent, waiting on signed docs — needs a call nudge"],
         conversation_history=[
-            {"step": 1, "channel": "email", "content": "Intro email"},
-            {"step": 2, "channel": "call", "content": "Positive discovery call"},
-            {"step": 3, "channel": "email", "content": "Proposal sent"},
+            {"step":1,"channel":"email","content":"Intro email"},
+            {"step":2,"channel":"call","content":"Positive discovery call"},
+            {"step":3,"channel":"email","content":"Proposal sent"},
         ],
     ),
     "L-008": LeadProfile(
@@ -116,19 +121,17 @@ SEED_LEADS: Dict[str, LeadProfile] = {
         objections=["pricing", "contract terms"],
         notes=["In negotiation — message preferred for quick back-and-forth"],
         conversation_history=[
-            {"step": 1, "channel": "email", "content": "Intro"},
-            {"step": 2, "channel": "call", "content": "Negotiation call"},
+            {"step":1,"channel":"email","content":"Intro"},
+            {"step":2,"channel":"call","content":"Negotiation call"},
         ],
     ),
-
-    # ── COMPLIANCE / EDGE CASE leads ──────────────────────────────────────
+    # COMPLIANCE / EDGE CASES
     "L-009": LeadProfile(
         lead_id="L-009", lead_name="Vijay Patel",
         company="DataCore", role="CEO",
         lead_stage="new", last_contact_channel="none",
         days_since_last_contact=0, next_followup_due=0,
-        consent=False,  # ← do-not-contact
-        sentiment="cold",
+        consent=False, sentiment="cold",
         documents_pending=False, preferred_channel="email",
         notes=["GDPR opt-out — do not contact"],
     ),
@@ -136,13 +139,11 @@ SEED_LEADS: Dict[str, LeadProfile] = {
         lead_id="L-010", lead_name="Deepa Menon",
         company="Meridian Labs", role="Director of Engineering",
         lead_stage="contacted", last_contact_channel="email",
-        days_since_last_contact=0, next_followup_due=2,  # contacted TODAY
+        days_since_last_contact=0, next_followup_due=2,
         consent=True, sentiment="neutral",
         documents_pending=False, preferred_channel="email",
         notes=["Just emailed — too soon to contact again"],
-        conversation_history=[
-            {"step": 1, "channel": "email", "content": "Intro email sent today"},
-        ],
+        conversation_history=[{"step":1,"channel":"email","content":"Intro email sent today"}],
     ),
     "L-011": LeadProfile(
         lead_id="L-011", lead_name="Arjun Nambiar",
@@ -154,8 +155,6 @@ SEED_LEADS: Dict[str, LeadProfile] = {
         objections=["went with competitor"],
         notes=["Closed lost — re-engage only after 90 days"],
     ),
-
-    # ── ADDITIONAL realistic leads ─────────────────────────────────────────
     "L-012": LeadProfile(
         lead_id="L-012", lead_name="Nisha Gupta",
         company="Quantify AI", role="Product Manager",
@@ -173,9 +172,7 @@ SEED_LEADS: Dict[str, LeadProfile] = {
         consent=True, sentiment="warm",
         documents_pending=False, preferred_channel="message",
         notes=["Engaged on demo request, send follow-up message"],
-        conversation_history=[
-            {"step": 1, "channel": "message", "content": "Initial outreach"},
-        ],
+        conversation_history=[{"step":1,"channel":"message","content":"Initial outreach"}],
     ),
     "L-014": LeadProfile(
         lead_id="L-014", lead_name="Lavanya Suresh",
@@ -186,9 +183,9 @@ SEED_LEADS: Dict[str, LeadProfile] = {
         documents_pending=True, preferred_channel="email",
         notes=["Has been asked for docs twice — needs escalation"],
         conversation_history=[
-            {"step": 1, "channel": "email", "content": "Intro email"},
-            {"step": 2, "channel": "email", "content": "Document request 1"},
-            {"step": 3, "channel": "email", "content": "Document request 2"},
+            {"step":1,"channel":"email","content":"Intro email"},
+            {"step":2,"channel":"email","content":"Document request 1"},
+            {"step":3,"channel":"email","content":"Document request 2"},
         ],
     ),
     "L-015": LeadProfile(
@@ -199,9 +196,7 @@ SEED_LEADS: Dict[str, LeadProfile] = {
         consent=True, sentiment="hot",
         documents_pending=False, preferred_channel="call",
         notes=["Hot lead — senior stakeholder, send proposal ASAP"],
-        conversation_history=[
-            {"step": 1, "channel": "call", "content": "Strong qualification call"},
-        ],
+        conversation_history=[{"step":1,"channel":"call","content":"Strong qualification call"}],
     ),
     "L-016": LeadProfile(
         lead_id="L-016", lead_name="Ria Chatterjee",
@@ -221,9 +216,7 @@ SEED_LEADS: Dict[str, LeadProfile] = {
         documents_pending=False, preferred_channel="call",
         objections=["not the right time"],
         notes=["Said 'not now' — try a call to understand timeline"],
-        conversation_history=[
-            {"step": 1, "channel": "email", "content": "Intro email sent"},
-        ],
+        conversation_history=[{"step":1,"channel":"email","content":"Intro email sent"}],
     ),
     "L-018": LeadProfile(
         lead_id="L-018", lead_name="Pooja Varma",
@@ -233,9 +226,7 @@ SEED_LEADS: Dict[str, LeadProfile] = {
         consent=True, sentiment="warm",
         documents_pending=False, preferred_channel="any",
         notes=["Proposal sent 2 days ago — too early to follow up"],
-        conversation_history=[
-            {"step": 1, "channel": "email", "content": "Proposal sent"},
-        ],
+        conversation_history=[{"step":1,"channel":"email","content":"Proposal sent"}],
     ),
     "L-019": LeadProfile(
         lead_id="L-019", lead_name="Harish Nair",
@@ -259,96 +250,113 @@ SEED_LEADS: Dict[str, LeadProfile] = {
 
 
 # ─────────────────────────────────────────────
-# Stage transition logic
+# Stage transition engine
 # ─────────────────────────────────────────────
 
-STAGE_ORDER = [
-    "new", "contacted", "qualified", "awaiting_docs",
-    "proposal_sent", "negotiating", "closed_won", "closed_lost",
-]
+def _stage_index(stage: str) -> int:
+    return STAGE_ORDER.index(stage) if stage in STAGE_ORDER else 0
+
 
 def _next_stage(current: str, action: Action, lead: LeadProfile) -> str:
     """
-    Determine next stage based on current stage + action type.
-    Returns the new stage string (may be same as current).
-    """
-    at = action.action_type
+    Determine new stage from current stage + action.
 
+    Rules:
+    - request_documents: NEVER regresses. If stage < awaiting_docs → awaiting_docs.
+      If stage >= awaiting_docs → stage unchanged (docs requested in parallel).
+    - close_deal goal on make_call/send_message from negotiating → closed_won
+    - docs_received metadata → if in awaiting_docs, advance back to negotiating
+    - Standard progression per stage for outreach actions
+    """
+    at   = action.action_type
+    goal = action.goal or ""
+    meta = action.metadata or {}
+
+    # ── Document request: non-regressive ──────────────────────────────────
+    if at == "request_documents":
+        cur_idx = _stage_index(current)
+        aw_idx  = _stage_index("awaiting_docs")
+        if cur_idx < aw_idx:
+            return "awaiting_docs"
+        return current  # already at or past awaiting_docs — don't regress
+
+    # ── docs_received simulation ──────────────────────────────────────────
+    if meta.get("docs_received") and current == "awaiting_docs":
+        return "negotiating"
+
+    # ── Close deal ────────────────────────────────────────────────────────
+    if goal == "close_deal" and at in {"make_call", "send_message", "send_email"}:
+        if current in {"negotiating", "proposal_sent", "awaiting_docs"}:
+            return "closed_won"
+
+    # ── Withdraw ─────────────────────────────────────────────────────────
+    if goal == "withdraw":
+        return "closed_lost"
+
+    # ── Standard progression by current stage ────────────────────────────
     if current == "new":
-        if at in {"send_email", "make_call", "send_message"}:
+        if at in {"send_email", "make_call", "send_message", "run_campaign"}:
             return "contacted"
 
     elif current == "contacted":
-        if at in {"make_call", "send_email"} and not lead.objections:
+        if at in {"make_call", "send_email", "send_message"} and not lead.objections:
             return "qualified"
-        if at == "request_documents":
-            return "awaiting_docs"
 
     elif current == "qualified":
-        if at == "request_documents":
-            return "awaiting_docs"
-        if at in {"send_email", "make_call"} and action.goal == "send_proposal":
+        if goal == "send_proposal" and at in {"send_email", "make_call"}:
             return "proposal_sent"
-
-    elif current == "awaiting_docs":
-        # Only advance if metadata says docs received (set by grader)
-        if action.metadata.get("docs_received"):
-            return "qualified"
 
     elif current == "proposal_sent":
         if at in {"make_call", "send_message"} and not lead.objections:
             return "negotiating"
-
-    elif current == "negotiating":
-        if action.goal == "close_deal":
-            return "closed_won"
-        if action.goal == "withdraw":
-            return "closed_lost"
 
     return current  # no change
 
 
 def apply_action(lead: LeadProfile, action: Action) -> Tuple[LeadProfile, str]:
     """
-    Apply an action to a lead. Returns (updated_lead, new_stage).
-    Does NOT mutate the original — returns a copy.
+    Apply action to lead. Returns (updated_lead_copy, new_stage).
+    Never mutates the original.
     """
-    lead = deepcopy(lead)
-    at = action.action_type
+    lead    = deepcopy(lead)
+    at      = action.action_type
+    meta    = action.metadata or {}
 
     new_stage = _next_stage(lead.lead_stage, action, lead)
     lead.lead_stage = new_stage
 
-    # Record interaction in history
+    # Record contact
     if at in CONTACT_ACTIONS:
-        channel = {
-            "send_email": "email",
-            "make_call": "call",
-            "send_message": "message",
-            "request_documents": "email",
+        channel_map = {
+            "send_email": "email", "make_call": "call",
+            "send_message": "message", "request_documents": "email",
             "run_campaign": "email",
-        }.get(at, at)
-        lead.last_contact_channel = channel  # type: ignore[assignment]
+        }
+        channel = channel_map.get(at, at)
+        lead.last_contact_channel = channel      # type: ignore[assignment]
         lead.days_since_last_contact = 0
-        lead.next_followup_due = 3  # reset timer
+        lead.next_followup_due = 3
         lead.conversation_history.append({
             "channel": channel,
             "action_type": at,
-            "body": action.body[:120] if action.body else "",
-            "goal": action.goal,
+            "body": (action.body or "")[:120],
+            "goal": action.goal or "",
         })
 
-    if at == "update_crm":
-        crm_note = action.metadata.get("note", f"CRM updated at step")
-        lead.notes.append(str(crm_note))
-
-    if at == "schedule_followup":
-        days = action.metadata.get("in_days", 3)
-        lead.next_followup_due = int(days)
-
+    # Document state
     if at == "request_documents":
         lead.documents_pending = True
-        lead.lead_stage = "awaiting_docs"
-        new_stage = "awaiting_docs"
+
+    if meta.get("docs_received"):
+        lead.documents_pending = False
+
+    # CRM note
+    if at == "update_crm":
+        note = meta.get("note", "CRM updated")
+        lead.notes.append(str(note))
+
+    # Schedule followup
+    if at == "schedule_followup":
+        lead.next_followup_due = int(meta.get("in_days", 3))
 
     return lead, new_stage

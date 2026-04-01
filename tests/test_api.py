@@ -8,7 +8,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import pytest
 from fastapi.testclient import TestClient
-from app import app
+from server import app
 
 
 client = TestClient(app)
@@ -66,7 +66,7 @@ class TestStepEndpoint:
 
     def test_step_before_reset_fails(self):
         # Create a fresh app instance to avoid leftover state
-        from app import app as fresh_app
+        from server import app as fresh_app
         fresh_client = TestClient(fresh_app)
         # This may or may not fail depending on whether env was reset elsewhere
         # But we can test the step structure at least

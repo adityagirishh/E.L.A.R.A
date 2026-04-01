@@ -1,216 +1,254 @@
 """
-reward_engine.py
-Implements the exact reward table from the ELARA spec.
+reward_engine.py  —  ELARA dense reward system
 
-Positive:
-  correct channel      +0.2
-  correct timing       +0.1
-  good message         +0.2
-  CRM update           +0.1
-  lead progression     +0.3
-  policy compliance    +0.1
+Reward table (from spec):
+  Correct channel       +0.20
+  Correct timing        +0.10
+  Good message          +0.20
+  CRM update            +0.10
+  Lead progression      +0.30
+  Policy compliance     +0.10
 
 Penalties:
-  duplicate outreach   -0.2
-  wrong channel        -0.2
-  consent violation    -0.5
-  looping/useless      -0.1
+  Wrong channel         -0.20
+  Duplicate outreach    -0.20   (same channel AND same goal back-to-back)
+  Consent violation     -0.50
+  Looping               -0.10
+
+Fixes applied vs v1:
+  1. request_documents / run_campaign are EMAIL_ONLY — exempt from channel preference check
+  2. Timing 0d penalty exempt if previous action was a DIFFERENT action type (call→email is valid)
+  3. Duplicate penalty only fires on same channel + same goal (not purposeful multi-step)
 """
 
 from typing import Any, Dict, List, Tuple
 from models import Action, LeadProfile, ProductProfile
 
-
-# ─────────────────────────────────────────────
-# Channel logic
-# ─────────────────────────────────────────────
-
-# Actions that count as "contacting" a lead
-CONTACT_ACTIONS = {"send_email", "make_call", "send_message", "request_documents", "run_campaign"}
-
-# Map action_type → channel for duplicate/preferred-channel checks
-ACTION_CHANNEL_MAP = {
-    "send_email": "email",
-    "make_call": "call",
-    "send_message": "message",
-    "request_documents": "email",   # document requests go via email by default
-    "run_campaign": "email",
+CONTACT_ACTIONS = {
+    "send_email", "make_call", "send_message",
+    "request_documents", "run_campaign",
 }
 
-# Non-contact actions — always safe, small neutral reward
-NON_CONTACT_ACTIONS = {"update_crm", "schedule_followup", "escalate", "wait"}
+# These actions route via email regardless of lead preference → exempt from channel check
+EMAIL_ONLY_ACTIONS = {"request_documents", "run_campaign"}
+
+NON_CONTACT_ACTIONS = {
+    "update_crm", "schedule_followup", "escalate", "wait",
+}
+
+ACTION_CHANNEL_MAP = {
+    "send_email":        "email",
+    "make_call":         "call",
+    "send_message":      "message",
+    "request_documents": "email",
+    "run_campaign":      "email",
+}
 
 
-def _recent_channels(lead: LeadProfile, window: int = 1) -> List[str]:
-    """Return channels used in the last `window` interactions."""
-    history = lead.conversation_history[-window:] if lead.conversation_history else []
-    return [h.get("channel", "") for h in history]
+def _recent_history(lead: LeadProfile, n: int = 1) -> List[Dict[str, Any]]:
+    return lead.conversation_history[-n:] if lead.conversation_history else []
 
 
-# ─────────────────────────────────────────────
-# Individual reward components
-# ─────────────────────────────────────────────
+# ── 1. Channel ────────────────────────────────────────────────────────────────
 
 def reward_channel_choice(action: Action, lead: LeadProfile) -> Tuple[float, str]:
     """
-    +0.2 correct channel (matches preferred or best fit for context)
-    -0.2 wrong channel
+    EMAIL_ONLY actions (request_documents, run_campaign) are always exempt —
+    they must go via email regardless of preference.
+    preferred='any' → +0.20 for any channel.
+    Otherwise: match preferred → +0.20, mismatch → -0.20.
     """
-    action_channel = ACTION_CHANNEL_MAP.get(action.action_type)
-    if action_channel is None:
-        return 0.0, "non-contact action, no channel reward"
+    at = action.action_type
+    if at not in CONTACT_ACTIONS:
+        return 0.0, "non-contact action"
+
+    if at in EMAIL_ONLY_ACTIONS:
+        return 0.20, f"{at} always uses email — channel exempt from preference"
 
     preferred = lead.preferred_channel
-    # "any" means no preference — reward any channel used thoughtfully
+    channel   = ACTION_CHANNEL_MAP.get(at, "")
+
     if preferred == "any":
-        return 0.2, f"channel {action_channel} acceptable (no preference set)"
-
-    if action_channel == preferred:
-        return 0.2, f"correct channel: {action_channel} matches lead preference"
-    else:
-        return -0.2, f"wrong channel: used {action_channel}, lead prefers {preferred}"
+        return 0.20, f"channel {channel} acceptable (no preference set)"
+    if channel == preferred:
+        return 0.20, f"correct channel: {channel} matches lead preference"
+    return -0.20, f"wrong channel: used {channel}, lead prefers {preferred}"
 
 
-def reward_timing(action: Action, lead: LeadProfile) -> Tuple[float, str]:
+# ── 2. Timing ─────────────────────────────────────────────────────────────────
+
+def reward_timing(
+    action: Action,
+    lead: LeadProfile,
+    prev_action_type: str = "",
+) -> Tuple[float, str]:
     """
-    +0.1 contacting within or at the followup window
-    -0.1 contacting too soon (< 1 day since last contact, not a new lead)
+    First contact → +0.10 always.
+    Follow-up on time (days >= due) → +0.10.
+    Slightly early → +0.05.
+    Same-day follow-up EXEMPT if previous action was a DIFFERENT type
+    (e.g. call then immediate email is correct sales behaviour).
+    Too soon (same type, 0d) → -0.10.
     """
-    if action.action_type not in CONTACT_ACTIONS:
-        return 0.0, "non-contact action, no timing reward"
+    if at := action.action_type:
+        if at not in CONTACT_ACTIONS:
+            return 0.0, "non-contact action"
 
     days = lead.days_since_last_contact
-    due = lead.next_followup_due
+    due  = lead.next_followup_due
 
-    # Brand new lead — first contact is always on time
     if lead.last_contact_channel == "none":
-        return 0.1, "first contact — timing valid"
+        return 0.10, "first contact — timing valid"
 
-    # Too soon
+    prev_channel  = ACTION_CHANNEL_MAP.get(prev_action_type, "")
+    this_channel  = ACTION_CHANNEL_MAP.get(action.action_type, "")
+
+    # Same-day exempt if switching channel (call→email followup is correct)
+    if days == 0 and prev_channel and this_channel and prev_channel != this_channel:
+        return 0.10, f"immediate {this_channel} followup after {prev_channel} — valid cross-channel sequence"
+
     if days < 1:
-        return -0.1, f"contacted too soon ({days}d since last contact)"
+        return -0.10, f"contacted too soon ({days}d since last contact, same channel)"
 
-    # On time or overdue
     if days >= due:
-        return 0.1, f"follow-up on time ({days}d elapsed, due at {due}d)"
+        return 0.10, f"follow-up on time ({days}d elapsed, due at {due}d)"
 
-    # Slightly early but not spammy
-    return 0.05, f"slightly early follow-up ({days}d elapsed, due at {due}d)"
+    return 0.05, f"slightly early ({days}d elapsed, due at {due}d)"
 
 
-def reward_message_quality(action: Action, lead: LeadProfile, product: ProductProfile) -> Tuple[float, str]:
+# ── 3. Message quality ────────────────────────────────────────────────────────
+
+def reward_message_quality(
+    action: Action,
+    lead: LeadProfile,
+    product: ProductProfile,
+) -> Tuple[float, str]:
     """
-    +0.2 message body is non-empty, mentions lead name, relevant to context
-    Partial: +0.1 if body present but generic
-    0.0 if body empty
+    0.0   — empty body
+    +0.10 — body present
+    +0.05 — personalised (lead name or company mentioned)
+    +0.05 — product-relevant (feature, value prop, or objection addressed)
+    Max: +0.20
     """
-    if action.action_type in NON_CONTACT_ACTIONS and action.action_type != "run_campaign":
+    at = action.action_type
+    if at in NON_CONTACT_ACTIONS:
         return 0.0, "non-message action"
 
     body = (action.body or "").strip()
     if not body:
         return 0.0, "empty message body"
 
-    score = 0.0
-    reasons = []
-
-    # Body exists
-    score += 0.1
-    reasons.append("body present")
-
-    # Personalised — mentions lead name or company
-    name_lower = lead.lead_name.split()[0].lower()
-    company_lower = lead.company.lower()
+    score, reasons = 0.10, ["body present"]
     body_lower = body.lower()
 
+    name_lower    = lead.lead_name.split()[0].lower()
+    company_lower = lead.company.lower()
     if name_lower in body_lower or company_lower in body_lower:
         score += 0.05
         reasons.append("personalised")
 
-    # Relevant — mentions a product feature, value prop, or addresses objection
     product_terms = (
         [f.lower() for f in product.features] +
         [v.lower() for v in product.value_props] +
         [o.lower() for o in lead.objections]
     )
-    if any(term[:8] in body_lower for term in product_terms if len(term) >= 5):
+    if any(t[:8] in body_lower for t in product_terms if len(t) >= 5):
         score += 0.05
         reasons.append("product-relevant")
 
-    return min(score, 0.2), ", ".join(reasons)
+    return min(score, 0.20), ", ".join(reasons)
 
+
+# ── 4. CRM update ─────────────────────────────────────────────────────────────
 
 def reward_crm_update(action: Action) -> Tuple[float, str]:
-    """
-    +0.1 when agent explicitly calls update_crm
-    """
     if action.action_type == "update_crm":
-        return 0.1, "CRM updated"
-    return 0.0, "no CRM update"
+        return 0.10, "CRM updated"
+    return 0.0, "no CRM update this step"
 
 
-def reward_lead_progression(action: Action, lead: LeadProfile, new_stage: str) -> Tuple[float, str]:
-    """
-    +0.3 if the action caused the lead to advance a stage
-    0.0  if stage unchanged
-    -0.1 if stage regressed (shouldn't happen but guard it)
-    """
+# ── 5. Lead progression ───────────────────────────────────────────────────────
+
+def reward_lead_progression(
+    action: Action,
+    lead: LeadProfile,
+    new_stage: str,
+) -> Tuple[float, str]:
     STAGE_ORDER = [
         "new", "contacted", "qualified", "awaiting_docs",
-        "proposal_sent", "negotiating", "closed_won"
+        "proposal_sent", "negotiating", "closed_won",
     ]
     old_idx = STAGE_ORDER.index(lead.lead_stage) if lead.lead_stage in STAGE_ORDER else 0
-    new_idx = STAGE_ORDER.index(new_stage) if new_stage in STAGE_ORDER else 0
+    new_idx = STAGE_ORDER.index(new_stage)        if new_stage        in STAGE_ORDER else 0
 
     if new_idx > old_idx:
-        return 0.3, f"lead progressed: {lead.lead_stage} → {new_stage}"
+        bonus = 0.30
+        # Extra bonus for closing the deal
+        if new_stage == "closed_won":
+            bonus = 0.50
+        return bonus, f"lead progressed: {lead.lead_stage} → {new_stage}"
     if new_idx < old_idx:
-        return -0.1, f"lead regressed: {lead.lead_stage} → {new_stage}"
+        return -0.10, f"lead regressed: {lead.lead_stage} → {new_stage}"
     return 0.0, "stage unchanged"
 
 
-def reward_policy_compliance(action: Action, lead: LeadProfile) -> Tuple[float, str]:
-    """
-    +0.1 compliant action
-    -0.5 consent violated
-    -0.2 contacted via explicitly wrong channel when preference is set
-    """
-    # Consent check — hardest penalty
+# ── 6. Compliance ─────────────────────────────────────────────────────────────
+
+def reward_policy_compliance(
+    action: Action,
+    lead: LeadProfile,
+) -> Tuple[float, str]:
     if not lead.consent and action.action_type in CONTACT_ACTIONS:
-        return -0.5, "CONSENT VIOLATION: lead has consent=False"
+        return -0.50, "CONSENT VIOLATION: lead has consent=False"
+    return 0.10, "policy compliant"
 
-    return 0.1, "policy compliant"
 
+# ── 7. Duplicate outreach ─────────────────────────────────────────────────────
 
-def reward_duplicate_outreach(action: Action, lead: LeadProfile) -> Tuple[float, str]:
+def reward_duplicate_outreach(
+    action: Action,
+    lead: LeadProfile,
+    prev_action_type: str = "",
+    prev_goal: str = "",
+) -> Tuple[float, str]:
     """
-    -0.2 if the same channel was used in the immediately preceding step
+    Fires -0.20 only when BOTH conditions hold:
+      - Same channel as previous contact action
+      - Same goal as previous contact action (or both goals empty)
+
+    Call then email (different channels) → NOT duplicate.
+    Email intro then email doc-request (different goals) → NOT duplicate.
+    Email intro then email intro again (same channel + same goal) → duplicate.
     """
-    if action.action_type not in CONTACT_ACTIONS:
+    at = action.action_type
+    if at not in CONTACT_ACTIONS:
         return 0.0, "non-contact action"
 
-    recent = _recent_channels(lead, window=1)
-    action_channel = ACTION_CHANNEL_MAP.get(action.action_type, "")
+    if not prev_action_type or prev_action_type not in CONTACT_ACTIONS:
+        return 0.0, "no previous contact action"
 
-    if action_channel and recent and recent[-1] == action_channel:
-        return -0.2, f"duplicate outreach: {action_channel} used in last step too"
+    this_channel = ACTION_CHANNEL_MAP.get(at, "")
+    prev_channel = ACTION_CHANNEL_MAP.get(prev_action_type, "")
 
-    return 0.0, "no duplicate"
+    if this_channel != prev_channel:
+        return 0.0, "different channel — not a duplicate"
+
+    this_goal = (action.goal or "").strip()
+    if this_goal and prev_goal and this_goal != prev_goal:
+        return 0.0, f"different goal ({prev_goal} → {this_goal}) — purposeful sequence"
+
+    return -0.20, f"duplicate: {this_channel} with same goal '{this_goal}' used back-to-back"
 
 
-def reward_looping(step_count: int, max_steps: int, done: bool) -> Tuple[float, str]:
-    """
-    -0.1 if agent is burning steps without progressing
-    (applied when > 80% of budget used and episode not done)
-    """
-    if not done and step_count >= int(max_steps * 0.8):
-        return -0.1, f"inefficient: {step_count}/{max_steps} steps used, not done"
+# ── 8. Looping ────────────────────────────────────────────────────────────────
+
+def reward_looping(step_count: int, max_steps: int) -> Tuple[float, str]:
+    if step_count >= int(max_steps * 0.8):
+        return -0.10, f"inefficient: {step_count}/{max_steps} steps used, not done"
     return 0.0, "step budget ok"
 
 
-# ─────────────────────────────────────────────
-# Master reward calculator
-# ─────────────────────────────────────────────
+# ── Master calculator ─────────────────────────────────────────────────────────
 
 def calculate_reward(
     action: Action,
@@ -220,28 +258,32 @@ def calculate_reward(
     step_count: int,
     max_steps: int,
     done: bool,
+    prev_action_type: str = "",
+    prev_goal: str = "",
 ) -> Tuple[float, Dict[str, Any]]:
     """
     Returns (total_reward, breakdown_dict).
-    breakdown_dict has each component for transparency.
+    Pass prev_action_type and prev_goal from the episode log.
     """
-    components: Dict[str, Tuple[float, str]] = {}
+    components: Dict[str, Tuple[float, str]] = {
+        "channel":    reward_channel_choice(action, lead_before),
+        "timing":     reward_timing(action, lead_before, prev_action_type),
+        "message":    reward_message_quality(action, lead_before, product),
+        "crm_update": reward_crm_update(action),
+        "progression":reward_lead_progression(action, lead_before, lead_after_stage),
+        "compliance": reward_policy_compliance(action, lead_before),
+        "duplicate":  reward_duplicate_outreach(action, lead_before, prev_action_type, prev_goal),
+    }
 
-    components["channel"]     = reward_channel_choice(action, lead_before)
-    components["timing"]      = reward_timing(action, lead_before)
-    components["message"]     = reward_message_quality(action, lead_before, product)
-    components["crm_update"]  = reward_crm_update(action)
-    components["progression"] = reward_lead_progression(action, lead_before, lead_after_stage)
-    components["compliance"]  = reward_policy_compliance(action, lead_before)
-    components["duplicate"]   = reward_duplicate_outreach(action, lead_before)
-    components["looping"]     = reward_looping(step_count, max_steps, done)
+    # Only apply looping penalty if episode isn't done yet
+    if not done:
+        components["looping"] = reward_looping(step_count, max_steps)
 
     total = sum(v for v, _ in components.values())
-    total = round(max(-1.0, min(1.5, total)), 4)  # soft clamp
+    total = round(max(-1.5, min(2.0, total)), 4)
 
     breakdown = {
         k: {"reward": round(v, 4), "reason": r}
         for k, (v, r) in components.items()
     }
-
     return total, breakdown

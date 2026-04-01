@@ -1,12 +1,10 @@
 """
-environment.py
-ElaraEnv — the main OpenEnv-compatible environment class.
+environment.py  —  ElaraEnv
 
-API:
-    env = ElaraEnv()
-    obs           = env.reset(task_id="easy")
-    obs, r, done, info = env.step(action)
-    state_dict    = env.state()
+API (OpenEnv-compatible):
+    obs                     = env.reset(task_id="easy")
+    obs, reward, done, info = env.step(action)
+    state_dict              = env.state()
 """
 
 import json
@@ -15,18 +13,13 @@ from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
 
 from models import (
-    Action, EpisodeState, LeadProfile, Observation,
-    PolicyConstraints, ProductProfile,
+    Action, EpisodeState, LeadProfile,
+    Observation, PolicyConstraints, ProductProfile,
 )
 from crm_simulator import SEED_LEADS, apply_action
 from reward_engine import calculate_reward
 
 TASKS_DIR = Path(__file__).parent.parent / "tasks"
-
-
-# ─────────────────────────────────────────────
-# Seed product
-# ─────────────────────────────────────────────
 
 SEED_PRODUCT = ProductProfile(
     product_id="P-ELARA-001",
@@ -55,7 +48,8 @@ SEED_PRODUCT = ProductProfile(
     compliance_notes=[
         "Never contact leads with consent=False.",
         "Respect preferred_channel when set.",
-        "Do not contact same lead twice on same channel same day.",
+        "request_documents always goes via email — this is exempt from channel preference.",
+        "Do not contact same lead twice on same channel with the same goal.",
         "Escalate if documents not received after 2 requests.",
     ],
     value_props=[
@@ -65,16 +59,12 @@ SEED_PRODUCT = ProductProfile(
         "Compliance-safe outreach templates.",
     ],
     faqs=[
-        {"q": "What CRMs does it integrate with?", "a": "Salesforce, HubSpot, Pipedrive out of the box."},
+        {"q": "What CRMs does it integrate with?", "a": "Salesforce, HubSpot, Pipedrive."},
         {"q": "Is there a free trial?", "a": "Yes — 14 days, no credit card required."},
-        {"q": "How is pricing structured?", "a": "Per seat, starting at ₹2,999/month. Volume discounts available."},
+        {"q": "How is pricing structured?", "a": "Per seat, ₹2,999/month. Volume discounts available."},
     ],
 )
 
-
-# ─────────────────────────────────────────────
-# ElaraEnv
-# ─────────────────────────────────────────────
 
 class ElaraEnv:
 
@@ -83,18 +73,16 @@ class ElaraEnv:
     def __init__(self):
         self._state: Optional[EpisodeState] = None
 
-    # ── reset ─────────────────────────────────────────────────────────────
+    # ── reset ──────────────────────────────────────────────────────────────
 
     def reset(self, task_id: str = "easy", seed: Optional[int] = None) -> Observation:
-        """Start a fresh episode for the given task. Returns initial Observation."""
-
-        task_cfg = self._load_task(task_id)
-        lead_id  = task_cfg["lead_id"]
+        task_cfg  = self._load_task(task_id)
+        lead_id   = task_cfg["lead_id"]
         max_steps = task_cfg.get("max_steps", 5)
 
         leads = {k: deepcopy(v) for k, v in SEED_LEADS.items()}
         if lead_id not in leads:
-            raise ValueError(f"Lead {lead_id} not found in CRM.")
+            raise ValueError(f"Lead {lead_id} not found.")
 
         self._state = EpisodeState(
             product=deepcopy(SEED_PRODUCT),
@@ -108,41 +96,40 @@ class ElaraEnv:
             episode_log=[],
             seed=seed,
         )
-
         return self._build_observation(task_cfg.get("hint", ""))
 
-    # ── step ──────────────────────────────────────────────────────────────
+    # ── step ───────────────────────────────────────────────────────────────
 
     def step(self, action: Action) -> Tuple[Observation, float, bool, Dict[str, Any]]:
-        """
-        Take one action. Returns (observation, reward, done, info).
-        This is the canonical OpenEnv tuple shape.
-        """
         if self._state is None:
             raise RuntimeError("Call reset() before step().")
         if self._state.done:
-            obs = self._build_observation()
-            return obs, 0.0, True, {"message": "Episode already done. Call reset()."}
+            return self._build_observation(), 0.0, True, {"message": "Episode done. Call reset()."}
 
         s = self._state
-        lead_before = deepcopy(s.leads[s.current_lead_id])
 
-        # Wrong lead ID
         if action.target_lead_id not in s.leads:
-            reward = -0.3
-            info = {"error": f"Unknown lead id: {action.target_lead_id}", "reward_breakdown": {}}
             s.step_count += 1
-            s.total_reward += reward
             s.done = True
-            return self._build_observation(), reward, True, info
+            return self._build_observation(), -0.30, True, {"error": f"Unknown lead: {action.target_lead_id}"}
 
-        # Apply action → get updated lead + new stage
+        lead_before = deepcopy(s.leads[action.target_lead_id])
+
+        # Pull previous action context from log for smart duplicate/timing checks
+        prev_action_type, prev_goal = "", ""
+        if s.episode_log:
+            last = s.episode_log[-1]
+            prev_action_type = last.get("action_type", "")
+            prev_goal        = last.get("goal", "")
+
+        # Apply action
         updated_lead, new_stage = apply_action(s.leads[action.target_lead_id], action)
         s.leads[action.target_lead_id] = updated_lead
+        s.step_count += 1
+
+        done_after = s.step_count >= s.max_steps
 
         # Calculate reward
-        s.step_count += 1
-        done_after = s.step_count >= s.max_steps
         reward, breakdown = calculate_reward(
             action=action,
             lead_before=lead_before,
@@ -151,54 +138,50 @@ class ElaraEnv:
             step_count=s.step_count,
             max_steps=s.max_steps,
             done=done_after,
+            prev_action_type=prev_action_type,
+            prev_goal=prev_goal,
         )
 
         s.total_reward = round(s.total_reward + reward, 4)
-
-        # Episode end?
         if done_after:
             s.done = True
 
-        # Log
         log_entry = {
-            "step": s.step_count,
-            "action_type": action.action_type,
-            "target_lead": action.target_lead_id,
-            "goal": action.goal,
+            "step":         s.step_count,
+            "action_type":  action.action_type,
+            "target_lead":  action.target_lead_id,
+            "goal":         action.goal or "",
             "stage_before": lead_before.lead_stage,
-            "stage_after": new_stage,
-            "reward": reward,
-            "breakdown": breakdown,
-            "done": s.done,
+            "stage_after":  new_stage,
+            "reward":       reward,
+            "breakdown":    breakdown,
+            "done":         s.done,
         }
         s.episode_log.append(log_entry)
 
         info = {
-            "step": s.step_count,
-            "stage_before": lead_before.lead_stage,
-            "stage_after": new_stage,
+            "step":             s.step_count,
+            "stage_before":     lead_before.lead_stage,
+            "stage_after":      new_stage,
             "reward_breakdown": breakdown,
-            "total_reward": s.total_reward,
-            "done": s.done,
+            "total_reward":     s.total_reward,
+            "done":             s.done,
         }
+        return self._build_observation(), reward, s.done, info
 
-        obs = self._build_observation()
-        return obs, reward, s.done, info
-
-    # ── state ─────────────────────────────────────────────────────────────
+    # ── state ──────────────────────────────────────────────────────────────
 
     def state(self) -> Dict[str, Any]:
-        """Return full episode state as a dict."""
         if self._state is None:
             raise RuntimeError("Call reset() before state().")
         return self._state.model_dump()
 
-    # ── helpers ───────────────────────────────────────────────────────────
+    # ── helpers ────────────────────────────────────────────────────────────
 
     def _build_observation(self, hint: str = "") -> Observation:
-        s = self._state
+        s    = self._state
         lead = s.leads[s.current_lead_id]
-        product = s.product
+        prod = s.product
 
         policy = PolicyConstraints(
             consent_required=True,
@@ -224,14 +207,14 @@ class ElaraEnv:
             preferred_channel=lead.preferred_channel,
             objections=lead.objections,
             product_context={
-                "name": product.product_name,
-                "description": product.description,
-                "features": product.features,
-                "value_props": product.value_props,
-                "pricing_summary": product.pricing_summary,
-                "objection_playbook": product.objections,
-                "compliance_notes": product.compliance_notes,
-                "faqs": product.faqs,
+                "name":              prod.product_name,
+                "description":       prod.description,
+                "features":          prod.features,
+                "value_props":       prod.value_props,
+                "pricing_summary":   prod.pricing_summary,
+                "objection_playbook":prod.objections,
+                "compliance_notes":  prod.compliance_notes,
+                "faqs":              prod.faqs,
             },
             recent_history=lead.conversation_history[-5:],
             policy_constraints=policy,
@@ -244,11 +227,10 @@ class ElaraEnv:
         )
 
     def _task_hint(self) -> str:
-        if self._state is None:
+        if not self._state:
             return ""
         try:
-            cfg = self._load_task(self._state.task_id)
-            return cfg.get("hint", "")
+            return self._load_task(self._state.task_id).get("hint", "")
         except Exception:
             return ""
 
