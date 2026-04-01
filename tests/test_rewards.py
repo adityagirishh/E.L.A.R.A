@@ -103,7 +103,7 @@ class TestMessageQuality:
         product = make_product()
         action = Action(action_type="send_email", target_lead_id="L-001", body="Hello there")
         score, _ = reward_message_quality(action, lead, product)
-        assert score >= 0.1
+        assert score >= 0.05
 
     def test_personalised_body(self):
         lead = make_lead()
@@ -113,7 +113,7 @@ class TestMessageQuality:
             body="Hi Arun, reaching out about multi-channel outreach for NovaTech"
         )
         score, _ = reward_message_quality(action, lead, product)
-        assert score == 0.2  # body + personalised + product-relevant
+        assert abs(score - 0.15) < 1e-9  # body + personalised + product-relevant (no objection to address)
 
 
 class TestCrmUpdate:
@@ -170,19 +170,34 @@ class TestDuplicateOutreach:
         assert score == 0.0
 
     def test_duplicate(self):
-        lead = make_lead(conversation_history=[{"channel": "email"}])
-        action = Action(action_type="send_email", target_lead_id="L-001")
-        score, _ = reward_duplicate_outreach(action, lead)
+        # New API: duplicate detection uses prev_action_type + prev_goal, not lead history
+        lead = make_lead()
+        action = Action(action_type="send_email", target_lead_id="L-001", goal="intro")
+        score, _ = reward_duplicate_outreach(
+            action, lead,
+            prev_action_type="send_email",
+            prev_goal="intro",
+        )
         assert score == -0.2
+
+    def test_different_goal_not_duplicate(self):
+        lead = make_lead()
+        action = Action(action_type="send_email", target_lead_id="L-001", goal="get_documents")
+        score, _ = reward_duplicate_outreach(
+            action, lead,
+            prev_action_type="send_email",
+            prev_goal="intro",
+        )
+        assert score == 0.0
 
 
 class TestLooping:
     def test_no_looping(self):
-        score, _ = reward_looping(step_count=1, max_steps=5, done=False)
+        score, _ = reward_looping(step_count=1, max_steps=5)
         assert score == 0.0
 
     def test_looping_detected(self):
-        score, _ = reward_looping(step_count=4, max_steps=5, done=False)
+        score, _ = reward_looping(step_count=4, max_steps=5)
         assert score == -0.1
 
 

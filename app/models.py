@@ -77,6 +77,23 @@ class Action(BaseModel):
 
 
 # ─────────────────────────────────────────────
+# Lead summary (for multi-lead observations)
+# ─────────────────────────────────────────────
+
+class LeadSummary(BaseModel):
+    lead_id: str
+    lead_name: str
+    company: str
+    lead_stage: str
+    sentiment: str
+    preferred_channel: str
+    documents_pending: bool
+    consent: bool
+    days_since_last_contact: int
+    objections: List[str] = Field(default_factory=list)
+
+
+# ─────────────────────────────────────────────
 # Observation
 # ─────────────────────────────────────────────
 
@@ -90,6 +107,7 @@ class PolicyConstraints(BaseModel):
 class Observation(BaseModel):
     task_id: str
     step_count: int = 0
+    # Primary lead (the one last acted on or the default)
     lead_id: str
     lead_name: str
     company: str
@@ -103,6 +121,11 @@ class Observation(BaseModel):
     documents_pending: bool
     preferred_channel: str
     objections: List[str] = Field(default_factory=list)
+    # Multi-lead: summaries of ALL active leads in this task
+    active_leads: List[LeadSummary] = Field(default_factory=list)
+    # Dynamic responses from leads after contact actions
+    lead_responses: List[Dict[str, Any]] = Field(default_factory=list)
+    # Product, history, policy, actions, hint
     product_context: Dict[str, Any] = Field(default_factory=dict)
     recent_history: List[Dict[str, Any]] = Field(default_factory=list)
     policy_constraints: PolicyConstraints = Field(default_factory=PolicyConstraints)
@@ -129,10 +152,12 @@ class EpisodeState(BaseModel):
     product: ProductProfile
     leads: Dict[str, LeadProfile]
     current_lead_id: str
+    active_lead_ids: List[str] = Field(default_factory=list)
     task_id: str
     step_count: int = 0
     max_steps: int = 5
     done: bool = False
     total_reward: float = 0.0
     episode_log: List[Dict[str, Any]] = Field(default_factory=list)
+    lead_responses: List[Dict[str, Any]] = Field(default_factory=list)
     seed: Optional[int] = None

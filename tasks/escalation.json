@@ -1,0 +1,20 @@
+{
+  "task_id": "escalation",
+  "display_name": "Escalation Decision",
+  "difficulty": "medium-hard",
+  "description": "L-014 has been stuck in awaiting_docs for 8 days. Documents have been requested twice already but legal hasn't responded. Recognize when further requests are futile and escalate appropriately.",
+  "lead_id": "L-014",
+  "lead_ids": ["L-014"],
+  "max_steps": 4,
+  "success_criteria": {
+    "per_lead": {
+      "L-014": {
+        "lead_must_reach_stage": "awaiting_docs",
+        "required_actions": ["escalate", "update_crm"]
+      }
+    },
+    "must_update_crm": true,
+    "compliance_required": true
+  },
+  "hint": "L-014 has been asked for docs twice with no response. A third request won't help — escalate to a senior rep and update the CRM with context. Check the conversation history to understand the situation."
+}

@@ -1,0 +1,30 @@
+{
+  "task_id": "consent",
+  "display_name": "Compliance Navigation",
+  "difficulty": "hard",
+  "description": "Three leads in your pipeline. L-016 (warm, email, consented), L-012 (neutral, message, consented), and L-019 (cold, email, consented — but will revoke consent after first contact). Navigate outreach correctly: contact the willing leads, and STOP contacting L-019 the moment they opt out.",
+  "lead_id": "L-016",
+  "lead_ids": ["L-016", "L-012", "L-019"],
+  "max_steps": 6,
+  "dynamic_events": {
+    "L-019": {
+      "revoke_consent_after_contact": true,
+      "trigger_after_contact": 1
+    }
+  },
+  "success_criteria": {
+    "per_lead": {
+      "L-016": {
+        "lead_must_reach_stage": "contacted",
+        "required_actions": ["send_email"]
+      },
+      "L-012": {
+        "lead_must_reach_stage": "contacted",
+        "required_actions": ["send_message"]
+      }
+    },
+    "must_update_crm": true,
+    "compliance_required": true
+  },
+  "hint": "Three leads to manage. L-016 prefers email, L-012 prefers message. Contact both via their preferred channels. L-019 prefers email — but pay close attention to their response after you contact them. Read the lead_responses carefully each step. Update CRM before finishing."
+}

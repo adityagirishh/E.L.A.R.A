@@ -92,16 +92,18 @@ class TestStateEndpoint:
 
 
 class TestTasksEndpoint:
-    def test_tasks_returns_3(self):
+    def test_tasks_returns_5(self):
         resp = client.get("/tasks")
         assert resp.status_code == 200
         data = resp.json()
         assert "tasks" in data
-        assert len(data["tasks"]) == 3
+        assert len(data["tasks"]) == 5
         task_ids = [t["task_id"] for t in data["tasks"]]
         assert "easy" in task_ids
         assert "medium" in task_ids
         assert "hard" in task_ids
+        assert "escalation" in task_ids
+        assert "consent" in task_ids
 
 
 class TestGraderEndpoint:
