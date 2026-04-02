@@ -309,12 +309,12 @@ def fallback_action(
                 "body": "Hi Rajan, to finalise I need the signed NDA and procurement form.",
                 "goal": "get_documents",
             }
-        elif "send_email" not in l8_actions:
+        elif "send_message" not in l8_actions:
             return {
-                "action_type": "send_email", "target_lead_id": "L-008",
-                "body": "Hi Sunita, revised contract terms for BlueSky Tech attached.",
-                "goal": "send_revised_terms",
-            }
+        "action_type": "send_message", "target_lead_id": "L-008",
+        "body": "Hi Sunita, revised contract terms attached — flexible on the clause you flagged.",
+        "goal": "send_revised_terms",
+    }
         elif "update_crm" not in l7_actions + l8_actions:
             return {
                 "action_type": "update_crm", "target_lead_id": "L-007",

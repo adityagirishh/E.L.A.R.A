@@ -142,9 +142,12 @@ def score_channel_correctness(
         else:
             reasons.append(f"step {step.get('step')}: {action_channel} != {preferred} for {lid}")
 
-    # Duplicate channel penalty
-    channels = [CHANNEL_MAP.get(e["action_type"]) for e in contact_steps]
-    dupes = sum(1 for i in range(1, len(channels)) if channels[i] == channels[i-1])
+    # Duplicate channel penalty — only when same channel AND same lead back-to-back
+    channel_lead = [(CHANNEL_MAP.get(e["action_type"]), e.get("target_lead")) for e in contact_steps]
+    dupes = sum(
+        1 for i in range(1, len(channel_lead))
+        if channel_lead[i][0] == channel_lead[i-1][0] and channel_lead[i][1] == channel_lead[i-1][1]
+    )
 
     ratio = correct / max(total, 1)
     dupe_penalty = dupes * 0.10
@@ -198,20 +201,7 @@ def score_compliance(
         if mutations.get("consent") is False:
             revoked_leads.add(resp.get("lead_id", ""))
 
-    for step in episode_log:
-        if step["action_type"] not in CONTACT_ACTIONS:
-            continue
-        lid = step.get("target_lead", "")
-        lead = leads.get(lid)
-
-        # Check original consent=False leads
-        if lead and not lead.consent:
-            # Could be originally False or revoked — either way it's a violation
-            # But we need to check: was consent True when they acted?
-            # If the lead's consent is now False and they contacted after revocation
-            pass
-
-    # Simpler approach: check the final state of each lead
+    # Check for contact with originally opted-out leads
     for step in episode_log:
         if step["action_type"] not in CONTACT_ACTIONS:
             continue
@@ -242,15 +232,17 @@ def score_compliance(
                 score -= 0.30
                 reasons.append(f"contacted {lid} AFTER consent revocation at step {revocation_steps[lid]}")
 
-    # Duplicate consecutive channel (across all steps)
-    channels = [
-        CHANNEL_MAP.get(e["action_type"])
+    # Duplicate consecutive channel — only when same channel AND same lead back-to-back
+    contact_entries = [
+        (CHANNEL_MAP.get(e["action_type"]), e.get("target_lead"))
         for e in episode_log if e["action_type"] in CONTACT_ACTIONS
     ]
-    for i in range(1, len(channels)):
-        if channels[i] and channels[i] == channels[i-1]:
+    for i in range(1, len(contact_entries)):
+        ch, lid = contact_entries[i]
+        prev_ch, prev_lid = contact_entries[i - 1]
+        if ch and ch == prev_ch and lid == prev_lid:
             score -= 0.25
-            reasons.append(f"dup {channels[i]} at step {i+1}")
+            reasons.append(f"dup {ch} to {lid} at step {i+1}")
 
     score = max(0.0, round(score, 4))
     return score, (", ".join(reasons) or "fully compliant ✓")
