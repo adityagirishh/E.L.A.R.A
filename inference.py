@@ -15,10 +15,20 @@ import os
 import sys
 import json
 import textwrap
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from dotenv import load_dotenv
 from openai import OpenAI
 import requests
+
+# ── Load environment variables from .env.local ───────────────────────────────
+# Looks for .env.local in the same directory as this script, then falls back
+# to a plain .env.  Already-set shell/system env vars take precedence
+# (override=False is the default).
+
+_script_dir = Path(__file__).resolve().parent
+load_dotenv(_script_dir / ".env.local")   # first priority
 
 # ── Configuration ────────────────────────────────────────────────────────────
 
@@ -28,8 +38,10 @@ MODEL_NAME = os.getenv("MODEL_NAME")
 
 ENV_URL = os.getenv("ENV_URL", "http://localhost:7860")
 
+print(f"DEBUG: MODEL={os.getenv('MODEL_NAME')} URL={os.getenv('API_BASE_URL')}")
+
 MAX_STEPS_PER_TASK = {"easy": 3, "medium": 4, "hard": 7, "escalation": 4, "consent": 6}
-TEMPERATURE = 0.2
+TEMPERATURE = 0.0
 MAX_TOKENS = 500
 
 DEBUG = True
@@ -78,7 +90,7 @@ Rules:
 9. For multi-lead tasks, manage ALL active leads, not just the first one.
 10. Read the task_hint carefully — it tells you exactly what to do.
 
-Respond with ONLY the JSON object, no explanation or markdown.
+CRITICAL: Your ENTIRE response must be a single JSON object. No thinking, no explanation, no markdown, no preamble. Start your response with { and end with }. Nothing else.
 """).strip()
 
 
@@ -311,10 +323,10 @@ def fallback_action(
             }
         elif "send_message" not in l8_actions:
             return {
-        "action_type": "send_message", "target_lead_id": "L-008",
-        "body": "Hi Sunita, revised contract terms attached — flexible on the clause you flagged.",
-        "goal": "send_revised_terms",
-    }
+                "action_type": "send_message", "target_lead_id": "L-008",
+                "body": "Hi Sunita, revised contract terms attached — flexible on the clause you flagged.",
+                "goal": "send_revised_terms",
+            }
         elif "update_crm" not in l7_actions + l8_actions:
             return {
                 "action_type": "update_crm", "target_lead_id": "L-007",
