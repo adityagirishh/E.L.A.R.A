@@ -362,8 +362,9 @@ class ElaraEnv:
                 new_idx = max(0, min(len(sentiment_options) - 1, idx + delta))
                 lead.sentiment = sentiment_options[new_idx]
 
-            # Small chance of extra objection
-            if rng.random() < 0.2 and len(lead.objections) < 2:
+            # Small chance of extra objection — but NOT at stages where objections block progression
+            blocking_stages = {"contacted", "proposal_sent"}
+            if rng.random() < 0.2 and len(lead.objections) < 2 and lead.lead_stage not in blocking_stages:
                 candidates = [o for o in extra_objections if o not in lead.objections]
                 if candidates:
                     lead.objections.append(rng.choice(candidates))

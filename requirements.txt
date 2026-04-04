@@ -3,3 +3,4 @@ uvicorn[standard]>=0.24.0
 pydantic>=2.7.0
 requests>=2.25.0
 openai>=1.0.0
+openenv-core

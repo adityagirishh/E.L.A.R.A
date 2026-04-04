@@ -1,7 +1,11 @@
 name: elara
 version: "0.1.0"
 display_name: E.L.A.R.A.
-description: Sandboxed multi-channel sales operations environment for OpenEnv.
+description: >
+  Sandboxed multi-channel sales operations environment where an AI agent
+  ingests a product website, manages leads in a simulated CRM, selects the
+  optimal communication channel, executes compliant outreach, and updates
+  state across multi-step follow-up workflows.
 tags:
   - openenv
   - sales
@@ -9,3 +13,113 @@ tags:
   - multi-channel
   - hackathon
 entrypoint: server:app
+
+observation_space:
+  type: object
+  fields:
+    lead_id: string
+    lead_name: string
+    company: string
+    lead_stage: string
+    sentiment: string
+    preferred_channel: string
+    days_since_last_contact: integer
+    next_followup_due: integer
+    documents_pending: boolean
+    objections: list
+    consent: boolean
+    active_leads: list
+    lead_responses: list
+    product_context: object
+    recent_history: list
+    policy_constraints: object
+    task_hint: string
+    available_actions: list
+
+action_space:
+  type: object
+  fields:
+    action_type:
+      type: string
+      enum:
+        - send_email
+        - make_call
+        - send_message
+        - request_documents
+        - update_crm
+        - schedule_followup
+        - run_campaign
+        - escalate
+        - wait
+    target_lead_id: string
+    subject: string
+    body: string
+    goal: string
+    priority: string
+    metadata: object
+
+tasks:
+  - id: easy
+    display_name: First-Touch Outreach
+    difficulty: easy
+    description: >
+      Agent reads a new lead profile and selects the correct initial outreach
+      channel, personalises a message, and updates lead stage.
+    max_steps: 3
+    pass_threshold: 0.60
+
+  - id: medium
+    display_name: Follow-Up & Document Request
+    difficulty: medium
+    description: >
+      Agent handles an existing lead with a pricing objection, addresses the
+      concern, requests documents, and logs the interaction in the CRM.
+    max_steps: 4
+    pass_threshold: 0.60
+
+  - id: hard
+    display_name: Multi-Lead Orchestration
+    difficulty: hard
+    description: >
+      Agent manages two active leads simultaneously — one requiring a proposal
+      follow-up call and document request, another with contract term objections
+      — while respecting channel preferences and updating the CRM.
+    max_steps: 7
+    pass_threshold: 0.60
+
+  - id: escalation
+    display_name: Escalation Decision
+    difficulty: medium
+    description: >
+      Agent recognises a stuck deal where repeated document requests have failed
+      and escalates to a senior rep instead of looping again.
+    max_steps: 4
+    pass_threshold: 0.60
+
+  - id: consent
+    display_name: Compliance Navigation
+    difficulty: hard
+    description: >
+      Agent manages three leads, detects a mid-episode consent revocation from
+      one lead's reply, stops contacting that lead immediately, and correctly
+      completes outreach to the remaining two.
+    max_steps: 6
+    pass_threshold: 0.60
+
+reward:
+  type: dense
+  range: [-1.0, 1.0]
+  description: >
+    Per-step reward combining channel correctness, timing, message quality,
+    CRM updates, lead progression, and policy compliance. Penalties for wrong
+    channel, duplicate outreach, consent violations, and looping.
+
+grader:
+  score_range: [0.0, 1.0]
+  deterministic: true
+  dimensions:
+    - task_completion
+    - channel_correctness
+    - crm_accuracy
+    - compliance
+    - efficiency
