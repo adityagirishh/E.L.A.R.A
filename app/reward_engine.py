@@ -110,13 +110,12 @@ def reward_message_quality(
     product: ProductProfile,
 ) -> Tuple[float, str]:
     """
-    Scoring:
-      0.00 — empty body
-      0.05 — body present but generic
-      +0.05 — personalised (lead name or company)
-      +0.05 — product-relevant (feature/value prop mentioned)
-      +0.05 — objection addressed with solution keywords (not just mentioned)
-    Max: +0.20
+    Enhanced scoring (5 sub-dimensions, max 0.20):
+      +0.04 — body present and non-trivial (>20 chars)
+      +0.04 — personalised (lead name or company)
+      +0.04 — product-relevant (feature/value prop mentioned)
+      +0.04 — objection addressed with solution keywords
+      +0.04 — tone-appropriate for lead sentiment
     """
     at = action.action_type
     if at in NON_CONTACT_ACTIONS:
@@ -126,26 +125,33 @@ def reward_message_quality(
     if not body:
         return 0.0, "empty message body"
 
-    score, reasons = 0.05, ["body present"]
+    score, reasons = 0.0, []
     body_lower = body.lower()
 
-    # Personalised
+    # 1. Non-trivial body
+    if len(body) > 20:
+        score += 0.04
+        reasons.append("substantive body")
+    else:
+        reasons.append("body too short")
+
+    # 2. Personalised
     name_lower    = lead.lead_name.split()[0].lower()
     company_lower = lead.company.lower()
     if name_lower in body_lower or company_lower in body_lower:
-        score += 0.05
+        score += 0.04
         reasons.append("personalised")
 
-    # Product-relevant
+    # 3. Product-relevant
     product_terms = (
         [f.lower() for f in product.features] +
         [v.lower() for v in product.value_props]
     )
     if any(t[:8] in body_lower for t in product_terms if len(t) >= 5):
-        score += 0.05
+        score += 0.04
         reasons.append("product-relevant")
 
-    # Objection addressed with solution keywords
+    # 4. Objection addressed with solution keywords
     if lead.objections:
         addressed = False
         for obj in lead.objections:
@@ -154,12 +160,74 @@ def reward_message_quality(
                 addressed = True
                 break
         if addressed:
-            score += 0.05
+            score += 0.04
             reasons.append("objection addressed")
         else:
             reasons.append("objection NOT addressed")
 
-    return min(score, 0.20), ", ".join(reasons)
+    # 5. Tone appropriateness
+    aggressive_words = {"urgent", "immediately", "last chance", "final offer", "act now", "don't miss", "closing soon"}
+    gentle_words = {"no rush", "take your time", "whenever", "happy to wait", "at your convenience"}
+
+    has_aggressive = any(w in body_lower for w in aggressive_words)
+    has_gentle = any(w in body_lower for w in gentle_words)
+
+    sentiment = lead.sentiment
+    if sentiment in ("cold", "neutral"):
+        if has_aggressive:
+            score -= 0.02
+            reasons.append("aggressive tone with cold/neutral lead")
+        else:
+            score += 0.04
+            reasons.append("appropriate tone")
+    elif sentiment in ("warm", "hot"):
+        if has_gentle and sentiment == "hot":
+            score += 0.02
+            reasons.append("too passive for hot lead")
+        else:
+            score += 0.04
+            reasons.append("tone acceptable")
+
+    return min(round(score, 4), 0.20), ", ".join(reasons)
+
+
+def reward_conversation_coherence(
+    action: Action,
+    lead: LeadProfile,
+) -> Tuple[float, str]:
+    """
+    Penalise repetitive messages. Check if the agent's body is substantially
+    similar to their previous messages in conversation_history.
+    Bonus: +0.05 for fresh message, penalty: -0.10 for near-duplicate.
+    """
+    at = action.action_type
+    if at in NON_CONTACT_ACTIONS:
+        return 0.0, "non-message action"
+
+    body = (action.body or "").strip().lower()
+    if not body or len(body) < 10:
+        return 0.0, "too short to evaluate coherence"
+
+    prev_bodies = []
+    for entry in lead.conversation_history:
+        if entry.get("from") != "lead":
+            prev_body = entry.get("body", "").strip().lower()
+            if prev_body:
+                prev_bodies.append(prev_body)
+
+    if not prev_bodies:
+        return 0.05, "first message — coherence OK"
+
+    body_words = set(body.split())
+    for prev in prev_bodies:
+        prev_words = set(prev.split())
+        if not body_words or not prev_words:
+            continue
+        overlap = len(body_words & prev_words) / max(len(body_words | prev_words), 1)
+        if overlap > 0.7:
+            return -0.10, f"near-duplicate of previous message (overlap {overlap:.0%})"
+
+    return 0.05, "message is contextually fresh"
 
 
 # ── 4. CRM update ─────────────────────────────────────────────────────────────
@@ -263,6 +331,7 @@ def calculate_reward(
         "progression": reward_lead_progression(action, lead_before, lead_after_stage),
         "compliance":  reward_policy_compliance(action, lead_before),
         "duplicate":   reward_duplicate_outreach(action, lead_before, prev_action_type, prev_goal),
+        "coherence":   reward_conversation_coherence(action, lead_before),
     }
 
     if not done:

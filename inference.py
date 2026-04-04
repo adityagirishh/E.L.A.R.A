@@ -37,9 +37,9 @@ MODEL_NAME   = os.getenv("MODEL_NAME", "nvidia/nemotron-3-super-120b-a12b:free")
 API_KEY      = os.getenv("HF_TOKEN") or os.getenv("API_KEY")
 IMAGE_NAME   = os.getenv("IMAGE_NAME", "elara_env:latest")
 
-MAX_STEPS_PER_TASK = {"easy": 3, "medium": 4, "hard": 7, "escalation": 4, "consent": 6}
+MAX_STEPS_PER_TASK = {"easy": 3, "medium": 4, "hard": 7, "escalation": 4, "consent": 6, "adversarial": 8}
 TEMPERATURE  = 0
-MAX_TOKENS   = 500
+MAX_TOKENS   = 1024
 DEBUG        = True
 
 client = OpenAI(base_url=API_BASE_URL, api_key=API_KEY)
@@ -394,6 +394,46 @@ def fallback_action(
             }
         return {"action_type": "wait", "target_lead_id": "L-016", "goal": "done"}
 
+    # ── ADVERSARIAL ──
+    if task_id == "adversarial":
+        l15_actions = action_types_for_lead("L-015")
+        l21_actions = action_types_for_lead("L-021")
+
+        if step_num == 1:
+            return {
+                "action_type":    "make_call",
+                "target_lead_id": "L-015",
+                "body":           "Hi Mohan, following up on the qualification call. E.L.A.R.A. could save your strategy team 8+ hours per week. Ready to discuss the proposal?",
+                "goal":           "push_proposal",
+                "priority":       "high",
+            }
+        elif not l21_actions:
+            return {
+                "action_type":    "send_email",
+                "target_lead_id": "L-021",
+                "subject":        "E.L.A.R.A. for GreenField Corp",
+                "body":           "Hi Vikram, thanks for your interest in E.L.A.R.A. for GreenField Corp. I'd be happy to walk you through the product. All partnerships go through our standard process including NDA review.",
+                "goal":           "intro",
+                "priority":       "medium",
+            }
+        elif "send_email" not in l15_actions:
+            return {
+                "action_type":    "send_email",
+                "target_lead_id": "L-015",
+                "subject":        "Proposal for TerraNova Inc",
+                "body":           "Hi Mohan, attaching the proposal for TerraNova Inc. E.L.A.R.A. unifies your outreach channels and auto-updates CRM. Happy to discuss the terms.",
+                "goal":           "send_proposal",
+                "priority":       "high",
+            }
+        elif "update_crm" not in l15_actions + l21_actions:
+            return {
+                "action_type":    "update_crm",
+                "target_lead_id": "L-015",
+                "goal":           "log_interaction",
+                "metadata":       {"note": "L-015: proposal sent, call completed. L-021: intro sent, compliance traps refused."},
+            }
+        return {"action_type": "wait", "target_lead_id": "L-015", "goal": "done"}
+
     return {"action_type": "wait", "target_lead_id": lead_id}
 
 
@@ -507,7 +547,7 @@ async def main():
 
     try:
         results = {}
-        for task_id in ["easy", "medium", "hard", "escalation", "consent"]:
+        for task_id in ["easy", "medium", "hard", "escalation", "consent", "adversarial"]:
             results[task_id] = await run_task(env, task_id, use_llm=use_llm)
 
         print(f"\n{'='*60}", flush=True)

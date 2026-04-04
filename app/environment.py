@@ -79,7 +79,7 @@ SEED_PRODUCT = ProductProfile(
 
 class ElaraEnv:
 
-    AVAILABLE_TASKS = ["easy", "medium", "hard", "escalation", "consent"]
+    AVAILABLE_TASKS = ["easy", "medium", "hard", "escalation", "consent", "adversarial"]
 
     def __init__(self):
         self._state: Optional[EpisodeState] = None
@@ -222,6 +222,47 @@ class ElaraEnv:
                 "response_type": lead_response.get("response_type", ""),
             })
 
+        # Check for step-triggered dynamic events
+        events_this_step = []
+        step_events = self._dynamic_events.get("_step_triggers", {})
+        for event_cfg in step_events.get(str(s.step_count), []):
+            event_type = event_cfg.get("type")
+            target_lid = event_cfg.get("target_lead_id", action.target_lead_id)
+
+            if event_type == "budget_freeze" and target_lid in s.leads:
+                s.leads[target_lid].budget_status = "frozen"
+                events_this_step.append(f"budget_freeze:{target_lid}")
+                s.fired_events.append({"step": s.step_count, "type": "budget_freeze", "lead": target_lid})
+
+            elif event_type == "competitor_offer" and target_lid in s.leads:
+                comp = event_cfg.get("competitor_name", "RivalCo")
+                discount = event_cfg.get("discount", "20%")
+                s.leads[target_lid].competitor_offer = f"{comp} undercut by {discount}"
+                events_this_step.append(f"competitor_offer:{target_lid}")
+                s.fired_events.append({"step": s.step_count, "type": "competitor_offer", "lead": target_lid})
+
+            elif event_type == "champion_leaving" and target_lid in s.leads:
+                s.leads[target_lid].sentiment = "cold"
+                events_this_step.append(f"champion_leaving:{target_lid}")
+                s.fired_events.append({"step": s.step_count, "type": "champion_leaving", "lead": target_lid})
+
+        # Build email thread
+        if action.action_type in ("send_email", "request_documents"):
+            s.leads[action.target_lead_id].email_thread.append({
+                "from": "agent",
+                "subject": action.subject or "",
+                "body": (action.body or "")[:300],
+                "step": str(s.step_count),
+            })
+
+        if lead_response and action.action_type in ("send_email", "request_documents"):
+            s.leads[action.target_lead_id].email_thread.append({
+                "from": "lead",
+                "subject": f"RE: {action.subject or ''}",
+                "body": lead_response.get("text", ""),
+                "step": str(s.step_count),
+            })
+
         # Log
         log_entry = {
             "step":         s.step_count,
@@ -233,6 +274,7 @@ class ElaraEnv:
             "reward":       reward,
             "breakdown":    breakdown,
             "done":         s.done,
+            "body":         (action.body or "")[:200],
         }
         if lead_response:
             log_entry["lead_response"] = lead_response.get("text", "")
@@ -331,6 +373,10 @@ class ElaraEnv:
                 "schedule_followup", "run_campaign", "escalate", "wait",
             ],
             task_hint=hint or self._task_hint(),
+            email_thread=lead.email_thread[-10:],
+            stakeholder_signals=lead.stakeholder_signals,
+            budget_status=lead.budget_status,
+            competitor_offer=lead.competitor_offer,
         )
 
     def _task_hint(self) -> str:
@@ -373,6 +419,18 @@ class ElaraEnv:
             if rng.random() < 0.25 and lead.next_followup_due > 0:
                 lead.next_followup_due += rng.choice([-1, 0, 1])
                 lead.next_followup_due = max(1, lead.next_followup_due)
+
+            # Ghost probability assignment
+            if rng.random() < 0.15:
+                lead.ghost_probability = rng.choice([0.2, 0.3, 0.4])
+
+            # Budget constraint variation
+            if rng.random() < 0.2 and lead.lead_stage in ("qualified", "proposal_sent", "negotiating"):
+                lead.budget_status = rng.choice(["constrained", "available", "constrained"])
+
+            # Ambiguous signal for neutral/warm leads
+            if rng.random() < 0.2 and lead.sentiment in ("neutral", "warm") and not lead.surface_signal:
+                lead.surface_signal = rng.choice(["polite_brushoff", "budget_stall"])
 
     @staticmethod
     def _load_task(task_id: str) -> Dict[str, Any]:
