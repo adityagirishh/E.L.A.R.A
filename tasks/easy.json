@@ -2,16 +2,16 @@
   "task_id": "easy",
   "display_name": "First-Touch Outreach",
   "difficulty": "easy",
-  "description": "A new lead has come in. Read their profile, understand the product, and send the best possible first outreach via the correct channel.",
+  "description": "A new lead has come in with documents pending. Read their profile, send a personalised first-touch email via the correct channel, then request the pending documents to move the deal forward.",
   "lead_id": "L-001",
   "max_steps": 3,
   "success_criteria": {
-    "lead_must_reach_stage": "contacted",
-    "required_actions": ["send_email"],
+    "lead_must_reach_stage": "awaiting_docs",
+    "required_actions": ["send_email", "request_documents"],
     "must_update_crm": false,
-    "documents_must_be_requested": false,
+    "documents_must_be_requested": true,
     "must_respect_channel_preference": true,
     "compliance_required": true
   },
-  "hint": "L-001 prefers email. They have documents pending. Introduce yourself, mention a relevant product feature, and keep the body personalised."
+  "hint": "L-001 prefers email. They have documents pending. Introduce yourself, mention a relevant product feature, personalise with their name and company, then request the pending documents."
 }
