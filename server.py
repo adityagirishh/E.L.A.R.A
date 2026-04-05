@@ -83,7 +83,7 @@ def tasks():
     from pathlib import Path
     task_dir = Path(__file__).parent / "tasks"
     result = []
-    for tid in ["easy", "medium", "hard", "escalation", "consent"]:
+    for tid in ["easy", "medium", "hard", "escalation", "consent", "adversarial"]:
         p = task_dir / f"{tid}.json"
         if p.exists():
             result.append(json.loads(p.read_text()))

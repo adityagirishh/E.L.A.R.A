@@ -48,6 +48,21 @@ class LeadProfile(BaseModel):
     preferred_channel: Literal["email", "call", "message", "any"] = "any"
     conversation_history: List[Dict[str, Any]] = Field(default_factory=list)
     notes: List[str] = Field(default_factory=list)
+    # Ambiguous signals — surface text vs true intent
+    surface_signal: Optional[str] = None
+    true_intent: Optional[str] = None
+    # Stakeholder conflicts
+    stakeholder_signals: List[Dict[str, Any]] = Field(default_factory=list)
+    # Budget info (can change mid-episode)
+    budget_status: Literal["available", "constrained", "frozen", "unknown"] = "unknown"
+    # Competitor context
+    competitor_offer: Optional[str] = None
+    # Compliance trap flags (for adversarial task)
+    compliance_trap: Optional[str] = None
+    # Ghost probability — lead may stop responding
+    ghost_probability: float = 0.0
+    # Email thread (richer than conversation_history)
+    email_thread: List[Dict[str, str]] = Field(default_factory=list)
 
 
 # ─────────────────────────────────────────────
@@ -131,6 +146,16 @@ class Observation(BaseModel):
     policy_constraints: PolicyConstraints = Field(default_factory=PolicyConstraints)
     available_actions: List[str] = Field(default_factory=list)
     task_hint: str = ""
+    # Email thread for the current lead
+    email_thread: List[Dict[str, str]] = Field(default_factory=list)
+    # Stakeholder signals (may conflict)
+    stakeholder_signals: List[Dict[str, Any]] = Field(default_factory=list)
+    # Budget status for current lead
+    budget_status: str = "unknown"
+    # Competitor context
+    competitor_offer: Optional[str] = None
+    # Dynamic events that happened this step
+    events_this_step: List[str] = Field(default_factory=list)
 
 
 # ─────────────────────────────────────────────
@@ -161,3 +186,7 @@ class EpisodeState(BaseModel):
     episode_log: List[Dict[str, Any]] = Field(default_factory=list)
     lead_responses: List[Dict[str, Any]] = Field(default_factory=list)
     seed: Optional[int] = None
+    # Track dynamic events that have fired
+    fired_events: List[Dict[str, Any]] = Field(default_factory=list)
+    # Per-lead ghost counter
+    ghost_counters: Dict[str, int] = Field(default_factory=dict)

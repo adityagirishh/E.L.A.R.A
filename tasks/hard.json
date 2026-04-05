@@ -6,6 +6,18 @@
   "lead_id": "L-007",
   "lead_ids": ["L-007", "L-008"],
   "max_steps": 7,
+  "dynamic_events": {
+    "_step_triggers": {
+      "3": [
+        {
+          "type": "competitor_offer",
+          "target_lead_id": "L-008",
+          "competitor_name": "SalesForceX",
+          "discount": "15%"
+        }
+      ]
+    }
+  },
   "success_criteria": {
     "per_lead": {
       "L-007": {
