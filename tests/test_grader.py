@@ -35,6 +35,13 @@ class TestGraderEasy:
                 goal="intro",
                 priority="high",
             ),
+            Action(
+                action_type="request_documents",
+                target_lead_id="L-001",
+                subject="Documents — NovaTech",
+                body="Hi Arun, could you share the NDA and any pending documents so we can proceed?",
+                goal="get_documents",
+            ),
         ])
         assert result["pass"] is True
         assert result["score"] >= 0.60
@@ -120,26 +127,20 @@ class TestGraderHard:
                 goal="proposal_followup", priority="high",
             ),
             Action(
+                action_type="send_message", target_lead_id="L-008",
+                body="Hi Sunita, reviewing the contract terms for CloudMatrix — happy to walk through each clause.",
+                goal="handle_terms_objection", priority="high",
+            ),
+            Action(
                 action_type="request_documents", target_lead_id="L-007",
                 subject="Documents — Apex Ventures",
                 body="Hi Rajan, need the signed NDA and procurement form.",
                 goal="get_documents",
             ),
             Action(
-                action_type="send_message", target_lead_id="L-007",
-                body="Hi Rajan — sent the docs request via email. Let me know.",
-                goal="keep_warm",
-            ),
-            Action(
                 action_type="update_crm", target_lead_id="L-007",
                 goal="log_interaction",
-                metadata={"note": "Follow-up done. Docs requested. Targeting close."},
-            ),
-            Action(
-                action_type="make_call", target_lead_id="L-007",
-                body="Hi Rajan, documents received — ready to move forward?",
-                goal="close_deal",
-                metadata={"docs_received": True},
+                metadata={"note": "L-007: call + docs requested. L-008: terms objection handled."},
             ),
         ])
         assert result["pass"] is True

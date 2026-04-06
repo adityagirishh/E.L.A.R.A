@@ -17,8 +17,12 @@ STDOUT FORMAT
     [END]   success=<true|false> steps=<n> score=<0.000> rewards=<r1,r2,...,rn>
 """
 
+
+
 from __future__ import annotations
 
+from dotenv import load_dotenv
+load_dotenv(".env.local")
 import asyncio
 import json
 import os
@@ -162,7 +166,8 @@ Step {step_num}/{max_steps}
 Current observation:
 {json.dumps(observation, indent=2, default=str)}
 
-Based on this observation, choose your next action. Respond with a single JSON object.
+Respond with ONLY a JSON object. No text before or after. Example format:
+{{"action_type": "send_email", "target_lead_id": "L-001", "subject": "...", "body": "...", "goal": "...", "priority": "high"}}
 """).strip()
 
 

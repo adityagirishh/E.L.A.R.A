@@ -741,7 +741,7 @@ def grade(state: EpisodeState) -> Dict[str, Any]:
     mc, mr = score_crm_accuracy(log, must_update_crm)
     dims["crm_accuracy"] = {"score": mc, "reason": mr, "weight": WEIGHTS["crm_accuracy"]}
 
-    pc, pr = score_compliance(s.leads, log, s.lead_responses)
+    pc, pr, _fatal = score_compliance(s.leads, log, s.lead_responses)
     dims["compliance"] = {"score": pc, "reason": pr, "weight": WEIGHTS["compliance"]}
 
     ec, er = score_efficiency(s.step_count, s.max_steps, task_completed and pc > 0.0)
