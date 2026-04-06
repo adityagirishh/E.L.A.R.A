@@ -103,7 +103,7 @@ class TestMessageQuality:
         product = make_product()
         action = Action(action_type="send_email", target_lead_id="L-001", body="Hello there")
         score, _ = reward_message_quality(action, lead, product)
-        assert score >= 0.05
+        assert score >= 0.04
 
     def test_personalised_body(self):
         lead = make_lead()
@@ -113,18 +113,20 @@ class TestMessageQuality:
             body="Hi Arun, reaching out about multi-channel outreach for NovaTech"
         )
         score, _ = reward_message_quality(action, lead, product)
-        assert abs(score - 0.15) < 1e-9  # body + personalised + product-relevant (no objection to address)
+        assert abs(score - 0.16) < 1e-9  # body + personalised + product-relevant + tone (no objection to address)
 
 
 class TestCrmUpdate:
     def test_crm_update_action(self):
+        lead = make_lead()
         action = Action(action_type="update_crm", target_lead_id="L-001")
-        score, _ = reward_crm_update(action)
-        assert score == 0.1
+        score, _ = reward_crm_update(action, lead)
+        assert score == 0.15
 
     def test_non_crm_action(self):
+        lead = make_lead()
         action = Action(action_type="send_email", target_lead_id="L-001")
-        score, _ = reward_crm_update(action)
+        score, _ = reward_crm_update(action, lead)
         assert score == 0.0
 
 
@@ -170,23 +172,21 @@ class TestDuplicateOutreach:
         assert score == 0.0
 
     def test_duplicate(self):
-        # New API: duplicate detection uses prev_action_type + prev_goal, not lead history
+        # Duplicate detection: same lead + same channel back-to-back
         lead = make_lead()
         action = Action(action_type="send_email", target_lead_id="L-001", goal="intro")
         score, _ = reward_duplicate_outreach(
             action, lead,
             prev_action_type="send_email",
-            prev_goal="intro",
         )
         assert score == -0.2
 
-    def test_different_goal_not_duplicate(self):
+    def test_different_channel_not_duplicate(self):
         lead = make_lead()
-        action = Action(action_type="send_email", target_lead_id="L-001", goal="get_documents")
+        action = Action(action_type="make_call", target_lead_id="L-001", goal="get_documents")
         score, _ = reward_duplicate_outreach(
             action, lead,
             prev_action_type="send_email",
-            prev_goal="intro",
         )
         assert score == 0.0
 
