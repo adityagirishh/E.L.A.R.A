@@ -97,14 +97,12 @@ class TestTasksEndpoint:
         assert resp.status_code == 200
         data = resp.json()
         assert "tasks" in data
-        assert len(data["tasks"]) == 6
+        assert len(data["tasks"]) == 4
         task_ids = [t["task_id"] for t in data["tasks"]]
         assert "easy" in task_ids
         assert "medium" in task_ids
         assert "hard" in task_ids
-        assert "escalation" in task_ids
         assert "consent" in task_ids
-        assert "adversarial" in task_ids
 
 
 class TestGraderEndpoint:

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 run.py — E.L.A.R.A. Full Smoke Test
-Runs all 5 tasks (easy / medium / hard / escalation / consent) with good + bad agents.
+Runs all 4 tasks (easy / medium / hard / consent) with good + bad agents.
 Usage:  python run.py
 """
 
@@ -253,55 +253,6 @@ hard_bad = run("HARD · Bad Agent — Ignores L-008, spams same channel", "hard"
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# ESCALATION TASK
-# ═════════════════════════════════════════════════════════════════════════════
-
-escalation_good = run("ESCALATION · Good Agent — Recognize & Escalate", "escalation", [
-    # Recognise docs have been requested twice — escalate instead of requesting again
-    Action(
-        action_type="send_email",
-        target_lead_id="L-014",
-        body=(
-            "Hi Lavanya, I noticed the documents for ClearPath Solutions have been pending "
-            "for over a week. I understand these things can get stuck in legal. "
-            "I'm going to loop in our senior rep to help move things along."
-        ),
-        goal="context_before_escalation",
-    ),
-    Action(
-        action_type="escalate",
-        target_lead_id="L-014",
-        body="Escalating L-014 — docs requested twice with no response, 8 days elapsed.",
-        goal="escalate_stuck_deal",
-        metadata={"reason": "docs_stuck_in_legal", "prior_requests": 2},
-    ),
-    Action(
-        action_type="update_crm",
-        target_lead_id="L-014",
-        goal="log_interaction",
-        metadata={"note": "Escalated to senior rep. Docs requested 2x, no response after 8 days. Legal blockers suspected."},
-    ),
-])
-
-escalation_bad = run("ESCALATION · Bad Agent — Keeps requesting docs", "escalation", [
-    Action(
-        action_type="request_documents",
-        target_lead_id="L-014",
-        body="Please send the documents.",
-        goal="get_documents",
-    ),
-    Action(
-        action_type="request_documents",
-        target_lead_id="L-014",
-        body="Reminder: still need those docs.",
-        goal="get_documents",
-    ),
-    Action(action_type="wait", target_lead_id="L-014"),
-    Action(action_type="wait", target_lead_id="L-014"),
-])
-
-
-# ═════════════════════════════════════════════════════════════════════════════
 # CONSENT TASK (multi-lead: L-016, L-012, L-019 with consent trap)
 # ═════════════════════════════════════════════════════════════════════════════
 
@@ -384,8 +335,6 @@ results = [
     ("Medium · Bad ", medium_bad),
     ("Hard   · Good", hard_good),
     ("Hard   · Bad ", hard_bad),
-    ("Escal  · Good", escalation_good),
-    ("Escal  · Bad ", escalation_bad),
     ("Consent· Good", consent_good),
     ("Consent· Bad ", consent_bad),
 ]
@@ -401,11 +350,10 @@ sep()
 
 # Gaps
 pairs = [
-    ("Easy",      easy_good,       easy_bad),
-    ("Medium",    medium_good,     medium_bad),
-    ("Hard",      hard_good,       hard_bad),
-    ("Escalation",escalation_good, escalation_bad),
-    ("Consent",   consent_good,    consent_bad),
+    ("Easy",      easy_good,    easy_bad),
+    ("Medium",    medium_good,  medium_bad),
+    ("Hard",      hard_good,    hard_bad),
+    ("Consent",   consent_good, consent_bad),
 ]
 print(f"\n  Good vs Bad gaps:")
 for name, good, bad in pairs:

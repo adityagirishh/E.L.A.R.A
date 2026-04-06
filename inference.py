@@ -43,20 +43,21 @@ API_BASE_URL = os.getenv("API_BASE_URL", "https://openrouter.ai/api/v1")
 MODEL_NAME = os.getenv("MODEL_NAME", "nvidia/nemotron-3-super-120b-a12b:free")
 API_KEY = os.getenv("HF_TOKEN") or os.getenv("API_KEY")
 
-# Prefer the mandatory LOCAL_IMAGE_NAME, but keep IMAGE_NAME as a fallback.
-IMAGE_NAME = (
-    os.getenv("LOCAL_IMAGE_NAME")
-    or os.getenv("IMAGE_NAME")
-    or "elara_env:latest"
-)
+# Env server base URL. Inside an HF Space the server is already running on
+# localhost:7860 — Docker-in-Docker is not allowed, so we must connect to the
+# existing server instead of spinning up a new container. SPACE_URL can
+# override this for remote runs.
+BASE_URL = os.getenv("SPACE_URL") or os.getenv("ENV_BASE_URL") or "http://localhost:7860"
+
+# Optional local-dev fallback: if LOCAL_IMAGE_NAME/IMAGE_NAME is set AND
+# SPACE_URL is not, we'll spin up a container with from_docker_image().
+IMAGE_NAME = os.getenv("LOCAL_IMAGE_NAME") or os.getenv("IMAGE_NAME")
 
 MAX_STEPS_PER_TASK = {
     "easy": 3,
     "medium": 4,
     "hard": 7,
-    "escalation": 4,
     "consent": 6,
-    "adversarial": 8,
 }
 
 TEMPERATURE = 0
@@ -690,8 +691,8 @@ async def run_task(env: ElaraEnv, task_name: str, use_llm: bool = True):
         if done:
             break
 
-    # Call the grader endpoint on the Docker container for the real submission score.
-    http_base = env._ws_url.replace("ws://", "http://").replace("/ws", "")
+    # Call the grader endpoint on the running env server for the real submission score.
+    http_base = BASE_URL.rstrip("/")
     try:
         async with httpx.AsyncClient(timeout=30) as client:
             resp = await client.post(f"{http_base}/grader")
@@ -719,7 +720,18 @@ async def main():
     else:
         print("No LLM configured — using rule-based fallback agent", flush=True)
 
-    env = await ElaraEnv.from_docker_image(IMAGE_NAME)
+    # Prefer connecting to an already-running server (HF Space, local server,
+    # or docker container started out-of-band). Only spin up a local container
+    # when an explicit image is provided AND no SPACE_URL is set.
+    use_docker = IMAGE_NAME is not None and not os.getenv("SPACE_URL")
+    if use_docker:
+        print(f"Launching local container: {IMAGE_NAME}", flush=True)
+        env = await ElaraEnv.from_docker_image(IMAGE_NAME)
+    else:
+        print(f"Connecting to env server at {BASE_URL}", flush=True)
+        env = ElaraEnv(BASE_URL)
+        await env.connect()
+
     env._message_timeout = 120
 
     # Disable client-side keepalive pings — the server may take >20s
@@ -730,7 +742,7 @@ async def main():
 
     try:
         results = {}
-        for task_id in ["easy", "medium", "hard", "escalation", "consent", "adversarial"]:
+        for task_id in ["easy", "medium", "hard", "consent"]:
             results[task_id] = await run_task(env, task_id, use_llm=use_llm)
 
         print(f"\n{'=' * 60}", flush=True)
