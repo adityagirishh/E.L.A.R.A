@@ -79,7 +79,7 @@ SEED_PRODUCT = ProductProfile(
 
 class ElaraEnv:
 
-    AVAILABLE_TASKS = ["easy", "medium", "hard", "escalation", "consent", "adversarial"]
+    AVAILABLE_TASKS = ["easy", "medium", "hard", "consent"]
 
     def __init__(self):
         self._state: Optional[EpisodeState] = None

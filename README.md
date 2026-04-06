@@ -41,7 +41,7 @@ uvicorn server:app --host 0.0.0.0 --port 7860 --reload
 
 ### Way 1 — Python smoke test (fastest, no server)
 
-Tests all 3 tasks with good and bad agents. Prints every reward, stage transition, and final grade.
+Tests all 4 tasks with good and bad agents. Prints every reward, stage transition, and final grade.
 
 ```bash
 python run.py
@@ -69,7 +69,7 @@ Server is now live at `http://localhost:7860`
 | Method | Endpoint | What it does |
 |--------|----------|--------------|
 | GET    | `/health` | Ping — returns `{"status": "ok"}` |
-| GET    | `/tasks`  | List all 3 tasks with their configs |
+| GET    | `/tasks`  | List all 4 tasks with their configs |
 | POST   | `/reset`  | Start a new episode |
 | POST   | `/step`   | Take one action |
 | GET    | `/state`  | Full episode state |
@@ -155,7 +155,6 @@ elara/
     ├── easy.json        ← First-Touch Outreach (L-001, 3 steps)
     ├── medium.json      ← Follow-Up Handling (L-004, 4 steps)
     ├── hard.json        ← Multi-Lead Orchestration (L-007 + L-008, 7 steps)
-    ├── escalation.json  ← Escalation Decision (L-014, 4 steps)
     └── consent.json     ← Compliance Navigation (L-016 + L-012 + L-019, 6 steps)
 ```
 
@@ -277,7 +276,7 @@ obs.available_actions      # all 9 action types
 
 ---
 
-## Tasks (5 total, easy → hard)
+## Tasks (4 total, easy → hard)
 
 ### Easy — First-Touch Outreach
 - Lead: Arun Sharma (L-001) — new, prefers email, docs pending
@@ -296,12 +295,6 @@ obs.available_actions      # all 9 action types
 - Budget: 7 steps
 - Goal: advance both leads across channels, update CRM
 - Required: `make_call` + `request_documents` (L-007), `send_message` (L-008), `update_crm`
-
-### Escalation — Escalation Decision
-- Lead: Lavanya Suresh (L-014) — stuck in awaiting_docs for 8 days, docs requested twice
-- Budget: 4 steps
-- Goal: recognize futility of more doc requests, escalate to senior rep
-- Required actions: `escalate`, `update_crm`
 
 ### Consent — Compliance Navigation
 - **Three leads**: L-016 (warm, email), L-012 (neutral, message), L-019 (cold, email — **revokes consent after first contact**)
@@ -328,7 +321,6 @@ obs.available_actions      # all 9 action types
 | Easy       | 0.955 | ✓ |
 | Medium     | 0.910 | ✓ |
 | Hard       | 0.860 | ✓ |
-| Escalation | 0.980 | ✓ |
 | Consent    | 0.910 | ✓ |
 
 ---
