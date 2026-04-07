@@ -720,11 +720,17 @@ async def main():
     else:
         print("No LLM configured — using rule-based fallback agent", flush=True)
 
-    # Prefer connecting to an already-running server (HF Space, local server,
-    # or docker container started out-of-band). Only spin up a local container
-    # when an explicit image is provided AND no SPACE_URL is set.
-    use_docker = IMAGE_NAME is not None and not os.getenv("SPACE_URL")
-    if use_docker:
+    global BASE_URL
+    space_host = os.getenv("SPACE_HOST") or os.getenv("SPACE_URL")
+
+    if space_host:
+        if not space_host.startswith("http"):
+            space_host = "https://" + space_host
+        BASE_URL = space_host.rstrip("/")
+        print(f"Connecting to env server at {BASE_URL}", flush=True)
+        env = ElaraEnv(BASE_URL)
+        await env.connect()
+    elif IMAGE_NAME:
         print(f"Launching local container: {IMAGE_NAME}", flush=True)
         env = await ElaraEnv.from_docker_image(IMAGE_NAME)
     else:
@@ -733,10 +739,6 @@ async def main():
         await env.connect()
 
     env._message_timeout = 120
-
-    # Disable client-side keepalive pings — the server may take >20s
-    # to process complex steps (multi-lead, reward calculation).
-    # Server-side pings are also extended via Dockerfile uvicorn flags.
     if env._ws is not None:
         env._ws.ping_interval = None
 
