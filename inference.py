@@ -21,8 +21,7 @@ STDOUT FORMAT
 
 from __future__ import annotations
 
-from dotenv import load_dotenv
-load_dotenv(".env.local")
+
 import asyncio
 import json
 import os
@@ -722,43 +721,71 @@ async def main():
 
     global BASE_URL
     space_host = os.getenv("SPACE_HOST") or os.getenv("SPACE_URL")
-    server_thread = None
 
+    async def _try_connect(url: str):
+        e = ElaraEnv(url)
+        await e.connect()
+        return e
+
+    env = None
+
+    # 1) Explicit SPACE_HOST/SPACE_URL
     if space_host:
         if not space_host.startswith("http"):
             space_host = "https://" + space_host
         BASE_URL = space_host.rstrip("/")
         print(f"Connecting to env server at {BASE_URL}", flush=True)
-        env = ElaraEnv(BASE_URL)
-        await env.connect()
-    elif IMAGE_NAME:
+        env = await _try_connect(BASE_URL)
+
+    # 2) Try the standard HF Space port (validator likely runs the container here)
+    if env is None:
+        for candidate in ("http://localhost:7860", "http://127.0.0.1:7860"):
+            try:
+                print(f"Trying env server at {candidate}", flush=True)
+                env = await _try_connect(candidate)
+                BASE_URL = candidate
+                break
+            except Exception as e:
+                print(f"  not reachable: {type(e).__name__}: {e}", flush=True)
+
+    # 3) Local docker image (only if explicitly requested)
+    if env is None and IMAGE_NAME:
         print(f"Launching local container: {IMAGE_NAME}", flush=True)
         env = await ElaraEnv.from_docker_image(IMAGE_NAME)
-    else:
-        # Spawn the FastAPI server in-process so inference.py is self-contained.
-        import threading, socket, time
-        import uvicorn
-        from server import app as _elara_app
 
-        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        sock.bind(("127.0.0.1", 0))
-        port = sock.getsockname()[1]
-        sock.close()
+    # 4) Last resort: spawn server in-process
+    if env is None:
+        try:
+            import threading, socket, time, sys
+            sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+            import uvicorn
+            from server import app as _elara_app
 
-        config = uvicorn.Config(_elara_app, host="127.0.0.1", port=port, log_level="warning", ws_ping_interval=None, ws_ping_timeout=None)
-        server = uvicorn.Server(config)
-        server_thread = threading.Thread(target=server.run, daemon=True)
-        server_thread.start()
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.bind(("127.0.0.1", 0))
+            port = sock.getsockname()[1]
+            sock.close()
 
-        BASE_URL = f"http://127.0.0.1:{port}"
-        for _ in range(60):
-            if server.started:
-                break
-            time.sleep(0.25)
+            config = uvicorn.Config(
+                _elara_app, host="127.0.0.1", port=port,
+                log_level="warning", ws_ping_interval=None, ws_ping_timeout=None,
+            )
+            server = uvicorn.Server(config)
+            threading.Thread(target=server.run, daemon=True).start()
 
-        print(f"Connecting to in-process env server at {BASE_URL}", flush=True)
-        env = ElaraEnv(BASE_URL)
-        await env.connect()
+            for _ in range(80):
+                if server.started:
+                    break
+                time.sleep(0.25)
+
+            BASE_URL = f"http://127.0.0.1:{port}"
+            print(f"Connecting to in-process env server at {BASE_URL}", flush=True)
+            env = await _try_connect(BASE_URL)
+        except Exception as e:
+            import traceback
+            print(f"In-process server spawn failed: {e}", flush=True)
+            traceback.print_exc()
+            raise
 
     env._message_timeout = 120
     if env._ws is not None:
@@ -783,4 +810,10 @@ async def main():
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    import traceback
+    try:
+        asyncio.run(main())
+    except Exception:
+        print("[FATAL] inference.py crashed:", flush=True)
+        traceback.print_exc()
+        raise
