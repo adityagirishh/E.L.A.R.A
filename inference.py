@@ -722,6 +722,7 @@ async def main():
 
     global BASE_URL
     space_host = os.getenv("SPACE_HOST") or os.getenv("SPACE_URL")
+    server_thread = None
 
     if space_host:
         if not space_host.startswith("http"):
@@ -734,7 +735,28 @@ async def main():
         print(f"Launching local container: {IMAGE_NAME}", flush=True)
         env = await ElaraEnv.from_docker_image(IMAGE_NAME)
     else:
-        print(f"Connecting to env server at {BASE_URL}", flush=True)
+        # Spawn the FastAPI server in-process so inference.py is self-contained.
+        import threading, socket, time
+        import uvicorn
+        from server import app as _elara_app
+
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.bind(("127.0.0.1", 0))
+        port = sock.getsockname()[1]
+        sock.close()
+
+        config = uvicorn.Config(_elara_app, host="127.0.0.1", port=port, log_level="warning", ws_ping_interval=None, ws_ping_timeout=None)
+        server = uvicorn.Server(config)
+        server_thread = threading.Thread(target=server.run, daemon=True)
+        server_thread.start()
+
+        BASE_URL = f"http://127.0.0.1:{port}"
+        for _ in range(60):
+            if server.started:
+                break
+            time.sleep(0.25)
+
+        print(f"Connecting to in-process env server at {BASE_URL}", flush=True)
         env = ElaraEnv(BASE_URL)
         await env.connect()
 
